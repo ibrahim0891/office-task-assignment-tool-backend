@@ -1,6 +1,9 @@
+import "dotenv/config";
 import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
-import { PrismaClient, Role } from "@prisma/client";
+import { PrismaClient, Role } from "./generated/prisma/client";
+import { PrismaPg } from "@prisma/adapter-pg";
+import pg from "pg";
 import {
     processAvatarUpload,
     deleteFromCloudinary,
@@ -8,7 +11,11 @@ import {
     uploadImageAttachment,
 } from "./cloudinary";
 
-const prisma = new PrismaClient();
+const pool = new pg.Pool({
+    connectionString: process.env.DATABASE_URL,
+});
+const adapter = new PrismaPg(pool);
+const prisma = new PrismaClient({ adapter });
 const app = express();
 
 app.use(cors());
