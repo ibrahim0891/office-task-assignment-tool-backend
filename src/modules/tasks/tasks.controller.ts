@@ -8,7 +8,7 @@ export const getTasks = async (req: Request, res: Response) => {
     const isMember = userRole === "MEMBER";
 
     try {
-        const tasks = await tasksService.getTasksList(req.query, isMember ? actingUserId : undefined);
+        const tasks = await tasksService.getTasksList(req.query, actingUserId, userRole);
         sendResponse(res, 200, tasks);
     } catch (error: any) {
         if (error.message === "teamId is required.") {

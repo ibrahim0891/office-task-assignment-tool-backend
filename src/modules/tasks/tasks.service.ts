@@ -3,7 +3,7 @@ import { deleteFromCloudinary, uploadImageAttachment } from "../../cloudinary";
 import { parseLocalDate, getLocalDateString } from "../../utils/date";
 import { runCarryForwardAndRecurring } from "./taskEngine";
 
-export const getTasksList = async (query: any, restrictedToUserId?: string) => {
+export const getTasksList = async (query: any, actingUserId?: string, userRole?: string) => {
     const { teamId, date, userId, search, isSoftDeleted, isArchived, archivedOrDeleted } = query;
     if (!teamId) {
         throw new Error("teamId is required.");
@@ -14,6 +14,11 @@ export const getTasksList = async (query: any, restrictedToUserId?: string) => {
     }
 
     const whereClause: any = { teamId };
+
+    const isFetchingArchivedOrDeleted =
+        archivedOrDeleted === "true" ||
+        isSoftDeleted === "true" ||
+        isArchived === "true";
 
     if (archivedOrDeleted === "true") {
         whereClause.OR = [{ isSoftDeleted: true }, { isArchived: true }];
@@ -37,14 +42,27 @@ export const getTasksList = async (query: any, restrictedToUserId?: string) => {
         ];
     }
 
-    if (restrictedToUserId) {
-        const memberFilter = {
-            OR: [
-                { assignedToId: restrictedToUserId },
-                { createdById: restrictedToUserId }
-            ]
-        };
+    const isLeader = userRole === "LEADER";
 
+    let memberFilter = null;
+    if (isFetchingArchivedOrDeleted) {
+        if (!isLeader && actingUserId) {
+            memberFilter = {
+                createdById: actingUserId
+            };
+        }
+    } else {
+        if (userRole === "MEMBER" && actingUserId) {
+            memberFilter = {
+                OR: [
+                    { assignedToId: actingUserId },
+                    { createdById: actingUserId }
+                ]
+            };
+        }
+    }
+
+    if (memberFilter) {
         if (whereClause.OR) {
             const existingOR = whereClause.OR;
             delete whereClause.OR;
