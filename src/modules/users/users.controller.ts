@@ -123,9 +123,9 @@ export const inviteMember = async (req: Request, res: Response) => {
 };
 
 export const createTeam = async (req: Request, res: Response) => {
-    const { name, creatorId } = req.body;
+    const { name, creatorId, emoji } = req.body;
     try {
-        const team = await usersService.createNewTeam(name, creatorId);
+        const team = await usersService.createNewTeam(name, creatorId, emoji);
 
         // Refresh token to include the new workspace/role
         const user = await prisma.user.findUnique({ where: { id: creatorId } });
@@ -143,10 +143,10 @@ export const createTeam = async (req: Request, res: Response) => {
 
 export const updateTeamName = async (req: Request, res: Response) => {
     const { teamId } = req.params;
-    const { name } = req.body;
+    const { name, emoji } = req.body;
 
     try {
-        const updatedTeam = await usersService.updateTeam(teamId, name);
+        const updatedTeam = await usersService.updateTeam(teamId, name, emoji);
         sendResponse(res, 200, updatedTeam);
     } catch (error: any) {
         if (error.message === "Team name is required.") {

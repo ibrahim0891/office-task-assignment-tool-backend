@@ -288,9 +288,16 @@ export const inviteByEmail = async (
     return { membership, user: targetUser };
 };
 
-export const createNewTeam = async (name: string, creatorId: string) => {
+export const createNewTeam = async (
+    name: string,
+    creatorId: string,
+    emoji?: string,
+) => {
     const team = await prisma.team.create({
-        data: { name },
+        data: {
+            name,
+            emoji: emoji || "👤",
+        },
     });
 
     const defaultCols = [
@@ -367,14 +374,23 @@ export const createNewTeam = async (name: string, creatorId: string) => {
     return team;
 };
 
-export const updateTeam = async (teamId: string, name: string) => {
+export const updateTeam = async (
+    teamId: string,
+    name: string,
+    emoji?: string,
+) => {
     if (!name || !name.trim()) {
         throw new Error("Team name is required.");
     }
 
+    const updateData: any = { name: name.trim() };
+    if (emoji) {
+        updateData.emoji = emoji;
+    }
+
     return prisma.team.update({
         where: { id: teamId },
-        data: { name: name.trim() },
+        data: updateData,
     });
 };
 
