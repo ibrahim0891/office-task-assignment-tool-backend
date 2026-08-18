@@ -18,7 +18,7 @@ export const getTasks = async (req: Request, res: Response) => {
     }
 };
 
-import { notifyTeam } from "../../config/socket";
+import { notifyTeam, notifyTeamExclude } from "../../config/socket";
 
 export const createTask = async (req: Request, res: Response) => {
     const userRole = (req as any).userRole;
@@ -26,7 +26,14 @@ export const createTask = async (req: Request, res: Response) => {
 
     try {
         const task = await tasksService.createTaskItem(req.body, isMember);
-        notifyTeam(task.teamId, "task_updated", { action: "create", taskId: task.id });
+        const creatingUserId = req.body.createdById || (req.headers["x-user-id"] as string);
+        notifyTeam(task.teamId, "task_updated", {
+            action: "create",
+            taskId: task.id,
+            actingUserId: creatingUserId,
+            clientId: req.body.clientId,
+            timestamp: Date.now(),
+        });
         sendResponse(res, 201, task);
     } catch (error: any) {
         if (error.message.includes("Standard members can only assign tasks")) {
@@ -44,7 +51,14 @@ export const updateTask = async (req: Request, res: Response) => {
 
     try {
         const task = await tasksService.updateTaskItem(taskId, req.body, actingUserId, isMember);
-        notifyTeam(task.teamId, "task_updated", { action: "update", taskId: task.id });
+        notifyTeam(task.teamId, "task_updated", {
+            action: "update",
+            taskId: task.id,
+            columnId: task.columnId,
+            actingUserId,
+            clientId: req.body.clientId,
+            timestamp: Date.now(),
+        });
         sendResponse(res, 200, task);
     } catch (error: any) {
         if (error.message === "Task not found.") {
@@ -63,9 +77,15 @@ export const softDeleteTask = async (req: Request, res: Response) => {
 
     try {
         const result = await tasksService.softDeleteTaskItem(taskId, actingUserId);
-        const workspaceTeamId = (req as any).workspaceTeamId;
+        const workspaceTeamId = (req as any).workspaceTeamId || result.teamId;
         if (workspaceTeamId) {
-            notifyTeam(workspaceTeamId, "task_updated", { action: "delete", taskId });
+            notifyTeam(workspaceTeamId, "task_updated", {
+                action: "delete",
+                taskId,
+                actingUserId,
+                clientId: req.body.clientId,
+                timestamp: Date.now(),
+            });
         }
         sendResponse(res, 200, result);
     } catch (error: any) {

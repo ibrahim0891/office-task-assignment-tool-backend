@@ -252,6 +252,21 @@ export const updateTaskItem = async (taskId: string, body: any, actingUserId: st
     const updatedTask = await prisma.task.update({
         where: { id: taskId },
         data: updateData,
+        include: {
+            column: true,
+            createdBy: true,
+            assignedTo: true,
+            checklist: true,
+            comments: {
+                include: { user: true },
+                orderBy: { createdAt: "asc" },
+            },
+            attachments: true,
+            activities: {
+                include: { user: true },
+                orderBy: { createdAt: "desc" },
+            },
+        }
     });
 
     if (Object.keys(detailsChanges).length > 0) {
