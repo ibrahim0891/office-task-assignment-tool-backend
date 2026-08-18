@@ -1896,7 +1896,7 @@ app.delete(
                 await deleteFromCloudinary(attachment.url);
             }
 
-            await prisma.attachment.delete({
+            await prisma.attachment.deleteMany({
                 where: { id: attachmentId },
             });
 
