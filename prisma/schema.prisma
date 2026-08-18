@@ -141,6 +141,7 @@ model Comment {
   taskId    String
   userId    String
   content   String
+  resolved  Boolean  @default(false)
   createdAt DateTime @default(now())
 
   task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
