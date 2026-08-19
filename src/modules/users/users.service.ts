@@ -1,5 +1,6 @@
 import { prisma, Role } from "../../config/prisma";
 import { processAvatarUpload, deleteFromCloudinary } from "../../cloudinary";
+import { createNotification } from "../notifications/notifications.service";
 
 export const getUsersExcludeTeam = async (teamId: string) => {
     return prisma.user.findMany({
@@ -200,13 +201,11 @@ export const removeMember = async (
             },
         });
 
-        await prisma.notification.create({
-            data: {
-                userId: reassignedLeaderId,
-                content: `Task "${task.title}" reassigned to you because the assignee was removed from the team.`,
-                type: "NEED_ATTENTION",
-                taskId: task.id,
-            },
+        await createNotification({
+            userId: reassignedLeaderId,
+            content: `Task "${task.title}" reassigned to you because the assignee was removed from the team.`,
+            type: "NEED_ATTENTION",
+            taskId: task.id,
         });
     }
 
@@ -231,12 +230,10 @@ export const addMember = async (
         include: { user: true, team: true },
     });
 
-    await prisma.notification.create({
-        data: {
-            userId,
-            content: `You have been added to team workspace "${membership.team.name}" as a ${membership.role}.`,
-            type: "REASSIGN",
-        },
+    await createNotification({
+        userId,
+        content: `You have been added to team workspace "${membership.team.name}" as a ${membership.role}.`,
+        type: "MEMBER_ADDED",
     });
 
     return membership;
@@ -277,12 +274,10 @@ export const inviteByEmail = async (
         include: { user: true, team: true },
     });
 
-    await prisma.notification.create({
-        data: {
-            userId: targetUser.id,
-            content: `You have been invited and added to workspace "${membership.team.name}" as a ${membership.role}.`,
-            type: "REASSIGN",
-        },
+    await createNotification({
+        userId: targetUser.id,
+        content: `You have been invited and added to workspace "${membership.team.name}" as a ${membership.role}.`,
+        type: "MEMBER_INVITED",
     });
 
     return { membership, user: targetUser };
@@ -460,12 +455,10 @@ export const updateMemberRole = async (
         include: { user: true, team: true },
     });
 
-    await prisma.notification.create({
-        data: {
-            userId,
-            content: `Your role in team workspace "${membership.team.name}" has been updated to ${membership.role}.`,
-            type: "REASSIGN",
-        },
+    await createNotification({
+        userId,
+        content: `Your role in team workspace "${membership.team.name}" has been updated to ${membership.role}.`,
+        type: "ROLE_UPDATED",
     });
 
     return membership;

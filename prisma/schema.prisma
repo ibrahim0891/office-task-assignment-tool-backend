@@ -61,6 +61,7 @@ model Team {
     columns           TaskColumn[]
     knowledgeArticles KnowledgeArticle[]
     bookmarks         Bookmark[]
+    notifications     Notification[]
 }
 
 model UserTeam {
@@ -186,9 +187,11 @@ model Notification {
     archivedAt DateTime?
     type       String // STALE_ALERT, COMMENT_MENTION, REASSIGN, NEED_ATTENTION
     taskId     String?
+    teamId     String?
     createdAt  DateTime  @default(now())
 
     user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+    team Team? @relation(fields: [teamId], references: [id], onDelete: Cascade)
 }
 
 model KnowledgeArticle {
