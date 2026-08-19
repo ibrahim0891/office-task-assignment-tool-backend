@@ -10,6 +10,7 @@ import {
 const router = Router();
 
 router.get("/tasks", resolveWorkspaceContext, tasksController.getTasks);
+router.get("/tasks/:taskId", resolveWorkspaceContext, tasksController.getTask);
 router.post("/tasks", resolveWorkspaceContext, tasksController.createTask);
 router.put("/tasks/:taskId", requireTaskOwnerOrLeaderOrAssignee, tasksController.updateTask);
 router.delete("/tasks/:taskId", requireTaskOwnerOrLeaderOrAssignee, tasksController.softDeleteTask);
@@ -18,6 +19,7 @@ router.delete("/tasks/:taskId/permanent", requireTaskOwnerOrLeaderOrAssignee, ta
 router.post("/tasks/:taskId/checklist", requireTaskOwnerOrLeaderOrAssignee, tasksController.createChecklistItem);
 router.put("/tasks/:taskId/checklist/:itemId", requireTaskOwnerOrLeaderOrAssignee, tasksController.updateChecklistItem);
 router.delete("/tasks/:taskId/checklist/:itemId", requireTaskOwnerOrLeaderOrAssignee, tasksController.deleteChecklistItem);
+router.get("/tasks/:taskId/comments", requireTaskOwnerOrLeaderOrAssignee, tasksController.getComments);
 router.post("/tasks/:taskId/comments", requireTaskOwnerOrLeaderOrAssignee, tasksController.createComment);
 router.delete("/tasks/:taskId/comments/:commentId", requireCommentOwner, tasksController.deleteComment);
 router.put("/tasks/:taskId/comments/:commentId/resolve", requireCommentOwnerOrTaskOwnerOrAssignee, tasksController.resolveComment);
