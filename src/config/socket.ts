@@ -26,6 +26,7 @@ export function initSocket(server: HttpServer): Server {
                 userSockets.set(userId, new Set());
             }
             userSockets.get(userId)!.add(socket.id);
+            socket.join(`user:${userId}`);
         });
 
         socket.on("join_team", (teamId: string) => {

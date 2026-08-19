@@ -1,5 +1,6 @@
 import { prisma, Role } from "../../config/prisma";
 import { parseLocalDate, getLocalDateString } from "../../utils/date";
+import { createNotification } from "../notifications/notifications.service";
 
 export async function runCarryForwardAndRecurring(teamId: string, dateStr: string) {
     const targetDate = parseLocalDate(dateStr);
@@ -77,13 +78,11 @@ export async function runCarryForwardAndRecurring(teamId: string, dateStr: strin
 
             // Notify Leader(s)
             for (const membership of task.team.members) {
-                await prisma.notification.create({
-                    data: {
-                        userId: membership.userId,
-                        content: `Task "${task.title}" has been carried forward for 3 days and auto-flagged as "${needAttentionCol.name}".`,
-                        type: "NEED_ATTENTION",
-                        taskId: task.id,
-                    },
+                await createNotification({
+                    userId: membership.userId,
+                    content: `Task "${task.title}" has been carried forward for 3 days and auto-flagged as "${needAttentionCol.name}".`,
+                    type: "NEED_ATTENTION",
+                    taskId: task.id,
                 });
             }
         } else {
