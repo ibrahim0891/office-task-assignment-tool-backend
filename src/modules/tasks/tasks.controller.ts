@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { sendResponse } from "../../utils/response";
 import * as tasksService from "./tasks.service";
+import { prisma } from "../../config/prisma";
 
 export const getTasks = async (req: Request, res: Response) => {
     const actingUserId = req.headers["x-user-id"] as string;
@@ -160,12 +161,34 @@ export const deleteChecklistItem = async (req: Request, res: Response) => {
     }
 };
 
+export const getComments = async (req: Request, res: Response) => {
+    const { taskId } = req.params;
+    const page = parseInt(req.query.page as string || "1", 10);
+    const limit = parseInt(req.query.limit as string || "15", 10);
+
+    try {
+        const result = await tasksService.getTaskComments(taskId, page, limit);
+        sendResponse(res, 200, result);
+    } catch (error: any) {
+        sendResponse(res, 500, { error: error.message });
+    }
+};
+
 export const createComment = async (req: Request, res: Response) => {
     const { taskId } = req.params;
     const { userId, content } = req.body;
 
     try {
         const comment = await tasksService.createTaskComment(taskId, userId, content);
+        const task = await prisma.task.findUnique({ where: { id: taskId }, select: { teamId: true } });
+        if (task) {
+            notifyTeam(task.teamId, "task_updated", {
+                action: "comment_created",
+                taskId,
+                actingUserId: userId,
+                timestamp: Date.now(),
+            });
+        }
         sendResponse(res, 201, comment);
     } catch (error: any) {
         sendResponse(res, 500, { error: error.message });
@@ -178,6 +201,15 @@ export const deleteComment = async (req: Request, res: Response) => {
 
     try {
         await tasksService.deleteTaskComment(taskId, commentId, actingUserId);
+        const task = await prisma.task.findUnique({ where: { id: taskId }, select: { teamId: true } });
+        if (task) {
+            notifyTeam(task.teamId, "task_updated", {
+                action: "comment_deleted",
+                taskId,
+                actingUserId,
+                timestamp: Date.now(),
+            });
+        }
         sendResponse(res, 200, { message: "Comment deleted." });
     } catch (error: any) {
         sendResponse(res, 500, { error: error.message });
@@ -190,6 +222,15 @@ export const resolveComment = async (req: Request, res: Response) => {
 
     try {
         const comment = await tasksService.resolveTaskComment(taskId, commentId, actingUserId);
+        const task = await prisma.task.findUnique({ where: { id: taskId }, select: { teamId: true } });
+        if (task) {
+            notifyTeam(task.teamId, "task_updated", {
+                action: "comment_resolved",
+                taskId,
+                actingUserId,
+                timestamp: Date.now(),
+            });
+        }
         sendResponse(res, 200, comment);
     } catch (error: any) {
         sendResponse(res, 500, { error: error.message });
@@ -202,6 +243,15 @@ export const reopenComment = async (req: Request, res: Response) => {
 
     try {
         const comment = await tasksService.reopenTaskComment(taskId, commentId, actingUserId);
+        const task = await prisma.task.findUnique({ where: { id: taskId }, select: { teamId: true } });
+        if (task) {
+            notifyTeam(task.teamId, "task_updated", {
+                action: "comment_reopened",
+                taskId,
+                actingUserId,
+                timestamp: Date.now(),
+            });
+        }
         sendResponse(res, 200, comment);
     } catch (error: any) {
         sendResponse(res, 500, { error: error.message });
@@ -250,6 +300,19 @@ export const deleteAttachment = async (req: Request, res: Response) => {
         if (error.message === "Attachment not found.") {
             return sendResponse(res, 404, { error: error.message });
         }
+        sendResponse(res, 500, { error: error.message });
+    }
+};
+
+export const getTask = async (req: Request, res: Response) => {
+    const { taskId } = req.params;
+    try {
+        const task = await tasksService.getTaskItem(taskId);
+        if (!task) {
+            return sendResponse(res, 404, { error: "Task not found." });
+        }
+        sendResponse(res, 200, task);
+    } catch (error: any) {
         sendResponse(res, 500, { error: error.message });
     }
 };
