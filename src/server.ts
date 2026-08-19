@@ -2,6 +2,7 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import { prisma } from "./config/prisma";
+import { APP_CONFIG } from "./config/appConfig";
 import { authenticateToken, enforceObserverRole } from "./middleware/auth";
 
 // Route imports
@@ -43,9 +44,9 @@ app.use("/api", knowledgeRouter);
 app.use("/api", bookmarksRouter);
 app.use("/api", iframeRouter);
 
-const PORT = process.env.PORT || 5000;
+const PORT = APP_CONFIG.PORT;
 httpServer.listen(PORT, async () => {
-    console.log(`Backend server running on port ${PORT}`);
+    console.log(`Backend server running on port ${PORT}. Max Task Title Length: ${APP_CONFIG.MAX_TASK_TITLE_LENGTH}. Reset Code Expiry: ${APP_CONFIG.RESET_CODE_EXPIRY_MINUTES}m. Notification Purge: ${APP_CONFIG.NOTIFICATION_PURGE_DAYS}d`);
     try {
         // Purge legacy empty activity records from database
         await prisma.taskActivity.deleteMany({

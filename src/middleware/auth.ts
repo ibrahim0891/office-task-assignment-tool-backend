@@ -2,12 +2,13 @@ import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import { prisma, Role } from "../config/prisma";
 import { sendResponse } from "../utils/response";
+import { APP_CONFIG } from "../config/appConfig";
 
-export const JWT_SECRET = process.env.JWT_SECRET || "sm_technology_secret_key";
+export const JWT_SECRET = APP_CONFIG.JWT_SECRET;
 
 export function authenticateToken(req: Request, res: Response, next: NextFunction) {
     // Exclude authentication routes from token validation
-    if (req.path === "/api/auth/login" || req.path === "/api/auth/register") {
+    if (req.path.startsWith("/api/auth/")) {
         return next();
     }
 
@@ -69,7 +70,7 @@ export async function enforceObserverRole(req: Request, res: Response, next: Nex
     if (!["POST", "PUT", "DELETE"].includes(req.method)) {
         return next();
     }
-    if (req.path === "/api/auth/login" || req.path === "/api/auth/register") {
+    if (req.path.startsWith("/api/auth/")) {
         return next();
     }
 

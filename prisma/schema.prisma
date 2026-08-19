@@ -32,6 +32,11 @@ model User {
     createdAt        DateTime @default(now())
     updatedAt        DateTime @updatedAt
 
+    isVerified       Boolean  @default(false)
+    verificationCode String?
+    resetCode        String?
+    resetCodeExpires DateTime?
+
     // Relations
     teamMemberships   UserTeam[]
     createdTasks      Task[]             @relation("CreatedBy")
@@ -46,7 +51,7 @@ model User {
 model Team {
     id        String   @id @default(uuid())
     name      String
-    emoji     String   @default("👤")
+    emoji     String   @default("🧑‍💻")
     createdAt DateTime @default(now())
     updatedAt DateTime @updatedAt
 

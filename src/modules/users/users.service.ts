@@ -296,7 +296,7 @@ export const createNewTeam = async (
     const team = await prisma.team.create({
         data: {
             name,
-            emoji: emoji || "👤",
+            emoji: emoji || "🧑‍💻",
         },
     });
 

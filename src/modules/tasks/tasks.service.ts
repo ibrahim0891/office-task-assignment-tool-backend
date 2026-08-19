@@ -2,6 +2,7 @@ import { prisma } from "../../config/prisma";
 import { deleteFromCloudinary, uploadImageAttachment } from "../../cloudinary";
 import { parseLocalDate, getLocalDateString } from "../../utils/date";
 import { runCarryForwardAndRecurring } from "./taskEngine";
+import { APP_CONFIG } from "../../config/appConfig";
 
 export const getTasksList = async (query: any, actingUserId?: string, userRole?: string) => {
     const { teamId, date, userId, search, isSoftDeleted, isArchived, archivedOrDeleted } = query;
@@ -114,6 +115,13 @@ export const createTaskItem = async (body: any, isMember: boolean) => {
         recurrence,
     } = body;
 
+    if (!title || typeof title !== "string" || !title.trim()) {
+        throw new Error("Task title is required.");
+    }
+    if (title.trim().length > APP_CONFIG.MAX_TASK_TITLE_LENGTH) {
+        throw new Error(`Task title must not exceed ${APP_CONFIG.MAX_TASK_TITLE_LENGTH} characters.`);
+    }
+
     if (isMember && assignedToId && assignedToId !== createdById) {
         throw new Error("Standard members can only assign tasks to themselves.");
     }
@@ -193,6 +201,12 @@ export const updateTaskItem = async (taskId: string, body: any, actingUserId: st
     if (title !== undefined && title !== task.title) {
         if (actingUserId !== task.createdById) {
             throw new Error("Only the task creator can update the task title.");
+        }
+        if (!title.trim()) {
+            throw new Error("Task title cannot be empty.");
+        }
+        if (title.trim().length > APP_CONFIG.MAX_TASK_TITLE_LENGTH) {
+            throw new Error(`Task title must not exceed ${APP_CONFIG.MAX_TASK_TITLE_LENGTH} characters.`);
         }
         updateData.title = title;
         detailsChanges.title = { from: task.title, to: title };

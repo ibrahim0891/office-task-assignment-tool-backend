@@ -1,7 +1,8 @@
 import { prisma } from "../../config/prisma";
+import { APP_CONFIG } from "../../config/appConfig";
 
 export const purgeOldArchivedNotifications = async (userId: string) => {
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const thirtyDaysAgo = new Date(Date.now() - APP_CONFIG.NOTIFICATION_PURGE_DAYS * 24 * 60 * 60 * 1000);
     return prisma.notification.deleteMany({
         where: {
             userId,
