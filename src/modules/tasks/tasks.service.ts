@@ -6,13 +6,29 @@ import { APP_CONFIG } from "../../config/appConfig";
 import { createNotification, notifyTeamLeader } from "../notifications/notifications.service";
 
 export const getTasksList = async (query: any, actingUserId?: string, userRole?: string) => {
-    const { teamId, date, userId, search, isSoftDeleted, isArchived, archivedOrDeleted } = query;
+    const { teamId, date, userId, search, isSoftDeleted, isArchived, archivedOrDeleted, clientToday } = query;
     if (!teamId) {
         throw new Error("teamId is required.");
     }
 
     if (date) {
-        await runCarryForwardAndRecurring(teamId, date);
+        const requestedDate = parseLocalDate(date);
+        
+        let referenceTodayDate: Date;
+        if (clientToday && typeof clientToday === "string" && /^\d{4}-\d{2}-\d{2}$/.test(clientToday)) {
+            referenceTodayDate = parseLocalDate(clientToday);
+        } else {
+            const now = new Date();
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, "0");
+            const day = String(now.getDate()).padStart(2, "0");
+            const todayStr = `${year}-${month}-${day}`;
+            referenceTodayDate = parseLocalDate(todayStr);
+        }
+
+        if (requestedDate.getTime() <= referenceTodayDate.getTime()) {
+            await runCarryForwardAndRecurring(teamId, date);
+        }
     }
 
     const whereClause: any = { teamId };
@@ -122,7 +138,14 @@ export const createTaskItem = async (body: any, isMember: boolean) => {
         throw new Error("Standard members can only assign tasks to themselves.");
     }
 
-    const dateStr = date || getLocalDateString(new Date());
+    const { clientToday } = body;
+    const dateStr =
+        date ||
+        (clientToday &&
+        typeof clientToday === "string" &&
+        /^\d{4}-\d{2}-\d{2}$/.test(clientToday)
+            ? clientToday
+            : getLocalDateString(new Date()));
     const taskDate = parseLocalDate(dateStr);
     const finalAssignedToId = assignedToId || createdById;
 

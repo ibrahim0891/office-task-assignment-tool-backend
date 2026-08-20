@@ -8,8 +8,11 @@ export const getTasks = async (req: Request, res: Response) => {
     const userRole = (req as any).userRole;
     const isMember = userRole === "MEMBER";
 
+    // Read from request body or secure header, preventing URL query parameter tampering
+    const clientToday = req.body?.clientToday || (req.headers["x-client-today"] as string);
+
     try {
-        const tasks = await tasksService.getTasksList(req.query, actingUserId, userRole);
+        const tasks = await tasksService.getTasksList({ ...req.query, clientToday }, actingUserId, userRole);
         sendResponse(res, 200, tasks);
     } catch (error: any) {
         if (error.message === "teamId is required.") {
@@ -25,8 +28,10 @@ export const createTask = async (req: Request, res: Response) => {
     const userRole = (req as any).userRole;
     const isMember = userRole === "MEMBER";
 
+    const clientToday = req.body?.clientToday || (req.headers["x-client-today"] as string);
+
     try {
-        const task = await tasksService.createTaskItem(req.body, isMember);
+        const task = await tasksService.createTaskItem({ ...req.body, clientToday }, isMember);
         const creatingUserId = req.body.createdById || (req.headers["x-user-id"] as string);
         notifyTeam(task.teamId, "task_updated", {
             action: "create",
