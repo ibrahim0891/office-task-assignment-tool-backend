@@ -38,6 +38,9 @@ export async function runCarryForwardAndRecurring(teamId: string, dateStr: strin
             (targetDate.getTime() - task.originalDate.getTime()) /
                 (1000 * 60 * 60 * 24),
         );
+        if (daysElapsed <= 0) {
+            continue; // Safety: Never carry forward tasks on the same calendar day
+        }
 
         // We get the "Need Attention Later" column or the fallback column
         const needAttentionCol =
