@@ -46,6 +46,7 @@ model User {
     notifications     Notification[]
     knowledgeArticles KnowledgeArticle[]
     bookmarks         Bookmark[]
+    pushSubscriptions PushSubscription[]
 }
 
 model Team {
@@ -249,3 +250,16 @@ model Bookmark {
     @@index([teamId])
     @@index([createdById])
 }
+
+model PushSubscription {
+    id        String   @id @default(uuid())
+    userId    String
+    user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+    endpoint  String   @unique
+    p256dh    String
+    auth      String
+    createdAt DateTime @default(now())
+
+    @@index([userId])
+}
+

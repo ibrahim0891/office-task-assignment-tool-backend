@@ -1,6 +1,7 @@
 import { prisma, Role } from "../../config/prisma";
 import { APP_CONFIG } from "../../config/appConfig";
 import { getIO } from "../../config/socket";
+import { sendPushNotification } from "../push/push.service";
 
 export const purgeOldArchivedNotifications = async (userId: string) => {
     const thirtyDaysAgo = new Date(Date.now() - APP_CONFIG.NOTIFICATION_PURGE_DAYS * 24 * 60 * 60 * 1000);
@@ -26,6 +27,20 @@ export const createNotification = async (data: {
         console.log(`[Socket Server] Emitting notification to user:${data.userId}`, notification);
         io.to(`user:${data.userId}`).emit("new_notification", notification);
     }
+
+    // Trigger Chrome Web Push Notification in background
+    const url = data.taskId ? `/task-board?task=${data.taskId}` : "/task-board";
+    let title = "🔔 Workspace Update";
+    if (data.type === "NEED_ATTENTION") {
+        title = "⚠️ Action Needed";
+    } else if (data.type === "COMMENT_MENTION") {
+        title = "💬 New Mention";
+    }
+    
+    sendPushNotification(data.userId, title, data.content, url).catch((err) => {
+        console.error("Error triggering push notification:", err);
+    });
+
     return notification;
 };
 

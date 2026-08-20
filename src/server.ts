@@ -15,6 +15,7 @@ import notificationsRouter from "./modules/notifications/notifications.route";
 import knowledgeRouter from "./modules/knowledge/knowledge.route";
 import bookmarksRouter from "./modules/bookmarks/bookmarks.route";
 import iframeRouter from "./modules/iframe/iframe.route";
+import pushRouter from "./modules/push/push.route";
 
 import { createServer } from "http";
 import { initSocket } from "./config/socket";
@@ -43,6 +44,7 @@ app.use("/api", notificationsRouter);
 app.use("/api", knowledgeRouter);
 app.use("/api", bookmarksRouter);
 app.use("/api", iframeRouter);
+app.use("/api", pushRouter);
 
 const PORT = APP_CONFIG.PORT;
 httpServer.listen(PORT, async () => {
