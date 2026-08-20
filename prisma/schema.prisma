@@ -76,6 +76,7 @@ model UserTeam {
     team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
 
     @@unique([userId, teamId])
+    @@index([teamId])
 }
 
 model TaskColumn {
@@ -130,6 +131,14 @@ model Task {
     comments    Comment[]
     attachments Attachment[]
     activities  TaskActivity[]
+
+    @@index([teamId, date, isSoftDeleted, isArchived])
+    @@index([columnId, isSoftDeleted, date])
+    @@index([createdById])
+    @@index([assignedToId, isSoftDeleted, isArchived])
+    @@index([parentTaskId])
+    @@index([teamId, isSoftDeleted, isArchived, date])
+    @@index([teamId, isRecurring, isSoftDeleted])
 }
 
 model ChecklistItem {
@@ -141,6 +150,8 @@ model ChecklistItem {
     updatedAt   DateTime @updatedAt
 
     task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+    @@index([taskId])
 }
 
 model Comment {
@@ -153,6 +164,9 @@ model Comment {
 
     task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
     user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+    @@index([taskId])
+    @@index([userId])
 }
 
 model Attachment {
@@ -164,6 +178,8 @@ model Attachment {
     createdAt DateTime @default(now())
 
     task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+    @@index([taskId])
 }
 
 model TaskActivity {
@@ -176,6 +192,9 @@ model TaskActivity {
 
     task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
     user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+    @@index([taskId, createdAt])
+    @@index([userId])
 }
 
 model Notification {
@@ -192,6 +211,10 @@ model Notification {
 
     user User @relation(fields: [userId], references: [id], onDelete: Cascade)
     team Team? @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+    @@index([userId, isArchived, createdAt])
+    @@index([teamId])
+    @@index([taskId])
 }
 
 model KnowledgeArticle {
@@ -205,6 +228,9 @@ model KnowledgeArticle {
 
     team      Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
     createdBy User @relation(fields: [createdById], references: [id], onDelete: Cascade)
+
+    @@index([teamId])
+    @@index([createdById])
 }
 
 model Bookmark {
@@ -219,4 +245,7 @@ model Bookmark {
 
     team      Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
     createdBy User @relation(fields: [createdById], references: [id], onDelete: Cascade)
+
+    @@index([teamId])
+    @@index([createdById])
 }
