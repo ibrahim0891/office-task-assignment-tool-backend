@@ -30,6 +30,36 @@ export function authenticateToken(req: Request, res: Response, next: NextFunctio
     });
 }
 
+const roleCache = new Map<string, { role: Role; expiry: number }>();
+const ROLE_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+export function invalidateRoleCache(userId?: string, teamId?: string) {
+    if (userId && teamId) {
+        roleCache.delete(`${userId}:${teamId}`);
+    } else {
+        roleCache.clear();
+    }
+}
+
+export async function getCachedMembershipRole(userId: string, teamId: string): Promise<Role | null> {
+    const key = `${userId}:${teamId}`;
+    const cached = roleCache.get(key);
+    const now = Date.now();
+    if (cached && cached.expiry > now) {
+        return cached.role;
+    }
+    const membership = await prisma.userTeam.findUnique({
+        where: { userId_teamId: { userId, teamId } },
+        select: { role: true },
+    });
+    if (!membership) {
+        roleCache.delete(key);
+        return null;
+    }
+    roleCache.set(key, { role: membership.role, expiry: now + ROLE_CACHE_TTL_MS });
+    return membership.role;
+}
+
 // Middleware to require one of the allowed roles
 export function requireRole(allowedRoles: Role[]) {
     return async (req: Request, res: Response, next: NextFunction) => {
@@ -42,19 +72,17 @@ export function requireRole(allowedRoles: Role[]) {
         }
 
         try {
-            const membership = await prisma.userTeam.findUnique({
-                where: { userId_teamId: { userId: decoded.userId, teamId } },
-            });
+            const role = await getCachedMembershipRole(decoded.userId, teamId);
 
-            if (!membership) {
+            if (!role) {
                 return sendResponse(res, 403, { error: "Access denied. You are not a member of this workspace." });
             }
 
-            if (!allowedRoles.includes(membership.role)) {
+            if (!allowedRoles.includes(role)) {
                 return sendResponse(res, 403, { error: `Access denied. Requires one of: ${allowedRoles.join(", ")}` });
             }
 
-            (req as any).userRole = membership.role;
+            (req as any).userRole = role;
             (req as any).workspaceTeamId = teamId;
             next();
         } catch (error: any) {
@@ -264,15 +292,13 @@ export async function resolveWorkspaceContext(req: Request, res: Response, next:
     }
 
     try {
-        const membership = await prisma.userTeam.findUnique({
-            where: { userId_teamId: { userId: decoded.userId, teamId } },
-        });
+        const role = await getCachedMembershipRole(decoded.userId, teamId);
 
-        if (!membership) {
+        if (!role) {
             return sendResponse(res, 403, { error: "Access denied. You are not a member of this workspace." });
         }
 
-        (req as any).userRole = membership.role;
+        (req as any).userRole = role;
         (req as any).workspaceTeamId = teamId;
         next();
     } catch (error: any) {

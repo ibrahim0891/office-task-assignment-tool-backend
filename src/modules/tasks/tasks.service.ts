@@ -78,10 +78,7 @@ export const getTasksList = async (query: any, actingUserId?: string, userRole?:
     } else {
         if (userRole === "MEMBER" && actingUserId) {
             memberFilter = {
-                OR: [
-                    { assignedToId: actingUserId },
-                    { createdById: actingUserId }
-                ]
+                assignedToId: actingUserId
             };
         }
     }
@@ -781,28 +778,60 @@ export const deleteAttachmentItem = async (attachmentId: string, actingUserId: s
 };
 
 export const getTaskItem = async (taskId: string) => {
-    return prisma.task.findUnique({
-        where: { id: taskId },
-        include: {
-            column: true,
-            createdBy: {
-                select: { id: true, name: true, avatarUrl: true }
-            },
-            assignedTo: {
-                select: { id: true, name: true, avatarUrl: true }
-            },
-            checklist: true,
-            attachments: true,
-            activities: {
-                include: {
-                    user: {
-                        select: { id: true, name: true, avatarUrl: true }
-                    }
+    const [task, checklist, attachments] = await Promise.all([
+        prisma.task.findUnique({
+            where: { id: taskId },
+            include: {
+                column: true,
+                createdBy: {
+                    select: { id: true, name: true, avatarUrl: true }
                 },
-                orderBy: { createdAt: "desc" },
+                assignedTo: {
+                    select: { id: true, name: true, avatarUrl: true }
+                },
             },
+        }),
+        prisma.checklistItem.findMany({
+            where: { taskId },
+            orderBy: { createdAt: "asc" },
+        }),
+        prisma.attachment.findMany({
+            where: { taskId },
+            orderBy: { createdAt: "desc" },
+        }),
+    ]);
+
+    if (!task) return null;
+
+    return {
+        ...task,
+        checklist: checklist || [],
+        attachments: attachments || [],
+    };
+};
+
+export const getTaskActivities = async (taskId: string, page = 1, limit = 15) => {
+    const activities = await prisma.taskActivity.findMany({
+        where: { taskId },
+        include: {
+            user: {
+                select: { id: true, name: true, avatarUrl: true }
+            }
         },
+        orderBy: { createdAt: "desc" },
+        skip: (page - 1) * limit,
+        take: limit,
     });
+
+    const totalCount = await prisma.taskActivity.count({ where: { taskId } });
+    const hasMore = page * limit < totalCount;
+
+    return {
+        activities,
+        totalCount,
+        hasMore,
+        page
+    };
 };
 
 export const getTaskComments = async (taskId: string, page = 1, limit = 15) => {

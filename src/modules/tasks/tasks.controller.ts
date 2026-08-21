@@ -321,3 +321,16 @@ export const getTask = async (req: Request, res: Response) => {
         sendResponse(res, 500, { error: error.message });
     }
 };
+
+export const getTaskActivities = async (req: Request, res: Response) => {
+    const { taskId } = req.params;
+    const page = parseInt(req.query.page as string, 10) || 1;
+    const limit = parseInt(req.query.limit as string, 10) || 15;
+
+    try {
+        const result = await tasksService.getTaskActivities(taskId, page, limit);
+        sendResponse(res, 200, result);
+    } catch (error: any) {
+        sendResponse(res, 500, { error: error.message });
+    }
+};

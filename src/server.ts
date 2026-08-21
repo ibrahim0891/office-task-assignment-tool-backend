@@ -1,6 +1,7 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
+import compression from "compression";
 import { prisma } from "./config/prisma";
 import { APP_CONFIG } from "./config/appConfig";
 import { authenticateToken, enforceObserverRole } from "./middleware/auth";
@@ -24,6 +25,7 @@ const app = express();
 const httpServer = createServer(app);
 initSocket(httpServer);
 
+app.use(compression());
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ limit: "10mb", extended: true }));

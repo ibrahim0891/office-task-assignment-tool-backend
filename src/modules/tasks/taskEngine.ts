@@ -1,20 +1,34 @@
 import { prisma, Role } from "../../config/prisma";
 import { parseLocalDate, getLocalDateString } from "../../utils/date";
 
-// In-memory cache to prevent running heavy carry-forward repeatedly on rapid consecutive requests
-const lastRunMap = new Map<string, number>();
-const CACHE_TTL_MS = 60 * 1000; // 1 minute cooldown per team + date
+// Set storing `${teamId}:${dateStr}` pairs that have already completed carry-forward for that calendar day
+const processedDaySet = new Set<string>();
+
+export function resetCarryForwardDailyLock(teamId?: string, dateStr?: string) {
+    if (teamId && dateStr) {
+        processedDaySet.delete(`${teamId}:${dateStr}`);
+    } else if (teamId) {
+        for (const key of processedDaySet) {
+            if (key.startsWith(`${teamId}:`)) {
+                processedDaySet.delete(key);
+            }
+        }
+    } else {
+        processedDaySet.clear();
+    }
+}
 
 export async function runCarryForwardAndRecurring(teamId: string, dateStr: string) {
-    const cacheKey = `${teamId}:${dateStr}`;
-    const lastRun = lastRunMap.get(cacheKey);
-    const now = Date.now();
-    if (lastRun && now - lastRun < CACHE_TTL_MS) {
-        return; // Already executed recently for this workspace and date
+    const key = `${teamId}:${dateStr}`;
+    if (processedDaySet.has(key)) {
+        return; // Already completed for this workspace on this calendar day
     }
-    lastRunMap.set(cacheKey, now);
 
-    const targetDate = parseLocalDate(dateStr);
+    // Mark as processed so concurrent requests don't duplicate work
+    processedDaySet.add(key);
+
+    try {
+        const targetDate = parseLocalDate(dateStr);
 
     // 1. CARRY FORWARD LOGIC
     // Find all tasks in this team that are older than targetDate, are NOT complete (based on column),
@@ -47,6 +61,8 @@ export async function runCarryForwardAndRecurring(teamId: string, dateStr: strin
         const operations: any[] = [];
         const activitiesToCreate: any[] = [];
         const notificationsToCreate: any[] = [];
+
+        const standardTaskIds: string[] = [];
 
         for (const task of incompleteTasks) {
             // Calculate calendar days elapsed since original date
@@ -106,16 +122,7 @@ export async function runCarryForwardAndRecurring(teamId: string, dateStr: strin
                     });
                 }
             } else {
-                // Move task to target date
-                operations.push(
-                    prisma.task.update({
-                        where: { id: task.id },
-                        data: {
-                            date: targetDate,
-                            carryCount: currentCarryCount,
-                        },
-                    }),
-                );
+                standardTaskIds.push(task.id);
 
                 // Audit Log
                 activitiesToCreate.push({
@@ -130,6 +137,19 @@ export async function runCarryForwardAndRecurring(teamId: string, dateStr: strin
                     }),
                 });
             }
+        }
+
+        // Single bulk update for all standard carried tasks
+        if (standardTaskIds.length > 0) {
+            operations.push(
+                prisma.task.updateMany({
+                    where: { id: { in: standardTaskIds } },
+                    data: {
+                        date: targetDate,
+                        carryCount: { increment: 1 },
+                    },
+                }),
+            );
         }
 
         if (activitiesToCreate.length > 0) {
@@ -234,5 +254,9 @@ export async function runCarryForwardAndRecurring(teamId: string, dateStr: strin
                 }
             }
         }
+    }
+    } catch (err) {
+        processedDaySet.delete(key);
+        throw err;
     }
 }
