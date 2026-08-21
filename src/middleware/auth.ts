@@ -60,13 +60,45 @@ export async function getCachedMembershipRole(userId: string, teamId: string): P
     return membership.role;
 }
 
+async function extractTeamId(req: Request): Promise<string | undefined> {
+    let teamId = (req.headers["x-team-id"] as string) || req.body?.teamId || (req.query?.teamId as string) || req.params?.teamId;
+    if (!teamId && req.params?.projectId) {
+        const project = await prisma.project.findUnique({
+            where: { id: req.params.projectId },
+            select: { teamId: true },
+        });
+        if (project) {
+            teamId = project.teamId;
+        }
+    }
+    if (!teamId && req.params?.taskId) {
+        const task = await prisma.task.findUnique({
+            where: { id: req.params.taskId },
+            select: { teamId: true },
+        });
+        if (task) {
+            teamId = task.teamId;
+        }
+    }
+    if (!teamId && req.params?.invitationId) {
+        const inv = await prisma.projectInvitation.findUnique({
+            where: { id: req.params.invitationId },
+            include: { project: { select: { teamId: true } } },
+        });
+        if (inv?.project?.teamId) {
+            teamId = inv.project.teamId;
+        }
+    }
+    return teamId;
+}
+
 // Middleware to require one of the allowed roles
 export function requireRole(allowedRoles: Role[]) {
     return async (req: Request, res: Response, next: NextFunction) => {
         const decoded = (req as any).user;
         if (!decoded) return sendResponse(res, 401, { error: "Authentication required." });
 
-        const teamId = (req.headers["x-team-id"] as string) || req.body.teamId || req.query.teamId as string || req.params.teamId;
+        const teamId = await extractTeamId(req);
         if (!teamId) {
             return sendResponse(res, 400, { error: "Workspace team context is required." });
         }
@@ -115,7 +147,7 @@ export async function enforceObserverRole(req: Request, res: Response, next: Nex
     const decoded = (req as any).user;
     if (!decoded) return next();
 
-    const teamId = (req.headers["x-team-id"] as string) || req.body.teamId || req.query.teamId as string || req.params.teamId;
+    const teamId = await extractTeamId(req);
     if (!teamId) return next();
 
     try {
@@ -286,7 +318,7 @@ export async function resolveWorkspaceContext(req: Request, res: Response, next:
     const decoded = (req as any).user;
     if (!decoded) return sendResponse(res, 401, { error: "Authentication required." });
 
-    const teamId = (req.headers["x-team-id"] as string) || req.body.teamId || req.query.teamId as string || req.params.teamId;
+    const teamId = await extractTeamId(req);
     if (!teamId) {
         return sendResponse(res, 400, { error: "Workspace team context is required." });
     }

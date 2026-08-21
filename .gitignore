@@ -3,3 +3,5 @@ dist
 prisma/migrations
 src/generated/
 .env
+
+/project-note.md 

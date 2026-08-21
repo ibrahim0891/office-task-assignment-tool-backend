@@ -20,6 +20,15 @@ async function main() {
   await prisma.taskActivity.deleteMany();
   await prisma.task.deleteMany();
   await prisma.taskColumn.deleteMany();
+  await prisma.projectReworkLog.deleteMany();
+  await prisma.projectIncident.deleteMany();
+  await prisma.taskDependency.deleteMany();
+  await prisma.projectSubtask.deleteMany();
+  await prisma.projectTaskAssignee.deleteMany();
+  await prisma.projectTask.deleteMany();
+  await prisma.projectColumn.deleteMany();
+  await prisma.projectMember.deleteMany();
+  await prisma.project.deleteMany();
   await prisma.userTeam.deleteMany();
   await prisma.team.deleteMany();
   await prisma.user.deleteMany();

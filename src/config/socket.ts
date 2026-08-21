@@ -122,3 +122,12 @@ export function notifyTeamExclude(teamId: string, event: string, payload: any, e
         io.to(room).emit(event, payload);
     }
 }
+
+/**
+ * Broadcast event directly to a specific user's private room.
+ */
+export function notifyUser(userId: string, event: string, payload?: any) {
+    if (!io || !userId) return;
+    console.log(`[Socket Server] notifyUser to room user:${userId}, event: ${event}, payload:`, payload);
+    io.to(`user:${userId}`).emit(event, payload);
+}
