@@ -46,7 +46,13 @@ export const getTasksList = async (query: any, actingUserId?: string, userRole?:
     }
 
     if (date) {
-        whereClause.date = parseLocalDate(date);
+        const [year, month, day] = date.split("-").map(Number);
+        const startOfDay = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
+        const endOfDay = new Date(Date.UTC(year, month - 1, day, 23, 59, 59, 999));
+        whereClause.date = {
+            gte: startOfDay,
+            lte: endOfDay,
+        };
     }
 
     if (userId) {
