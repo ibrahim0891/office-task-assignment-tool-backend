@@ -115,14 +115,14 @@ export const registerUser = async (name: string, email: string, passwordString: 
         data: { name: `${name.split(" ")[0]}'s Personal Space` },
     });
 
-    // Create Default Kanban Columns
+    // Create Default Kanban Columns (To Do -> Up Next -> In Progress -> Done -> Others)
     const defaultCols = [
         { name: "To Do", order: 0, wipLimit: 10, isComplete: false, triggersCarryForward: true },
         { name: "Up Next", order: 1, wipLimit: 5, isComplete: false, triggersCarryForward: true },
         { name: "In Progress", order: 2, wipLimit: 3, isComplete: false, triggersCarryForward: true },
-        { name: "Blocked", order: 3, wipLimit: 3, isComplete: false, triggersCarryForward: true },
-        { name: "Need Attention Later", order: 4, wipLimit: 5, isComplete: false, triggersCarryForward: true },
-        { name: "Done", order: 5, wipLimit: null, isComplete: true, triggersCarryForward: false },
+        { name: "Done", order: 3, wipLimit: null, isComplete: true, triggersCarryForward: false },
+        { name: "Blocked", order: 4, wipLimit: 3, isComplete: false, triggersCarryForward: true },
+        { name: "Need Attention Later", order: 5, wipLimit: 5, isComplete: false, triggersCarryForward: true },
         { name: "Cancelled", order: 6, wipLimit: null, isComplete: false, triggersCarryForward: false },
     ];
 

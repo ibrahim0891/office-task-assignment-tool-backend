@@ -60,18 +60,25 @@ export const notifyTeamLeader = async (
         select: { userId: true },
     });
 
-    for (const leader of leaders) {
-        if (actingUserId && leader.userId === actingUserId) continue;
-        if (excludeUserIds.includes(leader.userId)) continue;
-        
-        await createNotification({
-            userId: leader.userId,
-            content,
-            type,
-            taskId,
-            teamId
-        });
-    }
+    const targetLeaders = leaders.filter((leader) => {
+        if (actingUserId && leader.userId === actingUserId) return false;
+        if (excludeUserIds.includes(leader.userId)) return false;
+        return true;
+    });
+
+    if (targetLeaders.length === 0) return;
+
+    await Promise.all(
+        targetLeaders.map((leader) =>
+            createNotification({
+                userId: leader.userId,
+                content,
+                type,
+                taskId,
+                teamId,
+            })
+        )
+    );
 };
 
 export const getNotificationsByUserId = async (userId: string, teamId: string, page = 1, limit = 10) => {

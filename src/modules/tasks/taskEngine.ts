@@ -205,6 +205,7 @@ export async function runCarryForwardAndRecurring(teamId: string, dateStr: strin
         });
         const existingSet = new Set(existingInstances.map((e) => e.title));
 
+        const tasksToSpawn = [];
         for (const template of recurringTemplates) {
             let shouldSpawn = false;
 
@@ -219,40 +220,49 @@ export async function runCarryForwardAndRecurring(teamId: string, dateStr: strin
             }
 
             if (shouldSpawn && !existingSet.has(template.title)) {
-                const spawnedTask = await prisma.task.create({
-                    data: {
-                        teamId: template.teamId,
-                        title: template.title,
-                        description: template.description,
-                        columnId: template.columnId,
-                        priority: template.priority,
-                        date: targetDate,
-                        originalDate: targetDate,
-                        dueDate: template.dueDate
-                            ? new Date(
-                                  targetDate.getTime() +
-                                      (new Date(template.dueDate).getTime() -
-                                          new Date(template.originalDate).getTime()),
-                              )
-                            : null,
-                        createdById: template.createdById,
-                        assignedToId: template.assignedToId,
-                        estimatedTime: template.estimatedTime,
-                        actualTime: 0,
-                        isRecurring: false,
-                    },
-                });
-
-                if (template.checklist && template.checklist.length > 0) {
-                    await prisma.checklistItem.createMany({
-                        data: template.checklist.map((item) => ({
-                            taskId: spawnedTask.id,
-                            title: item.title,
-                            isCompleted: false,
-                        })),
-                    });
-                }
+                tasksToSpawn.push(template);
             }
+        }
+
+        if (tasksToSpawn.length > 0) {
+            await Promise.all(
+                tasksToSpawn.map(async (template) => {
+                    const spawnedTask = await prisma.task.create({
+                        data: {
+                            teamId: template.teamId,
+                            title: template.title,
+                            description: template.description,
+                            columnId: template.columnId,
+                            priority: template.priority,
+                            date: targetDate,
+                            originalDate: targetDate,
+                            dueDate: template.dueDate
+                                ? new Date(
+                                      targetDate.getTime() +
+                                          (new Date(template.dueDate).getTime() -
+                                              new Date(template.originalDate).getTime()),
+                                  )
+                                : null,
+                            createdById: template.createdById,
+                            assignedToId: template.assignedToId,
+                            estimatedTime: template.estimatedTime,
+                            actualTime: 0,
+                            isRecurring: false,
+                        },
+                    });
+
+                    if (template.checklist && template.checklist.length > 0) {
+                        await prisma.checklistItem.createMany({
+                            data: template.checklist.map((item) => ({
+                                taskId: spawnedTask.id,
+                                title: item.title,
+                                isCompleted: false,
+                            })),
+                        });
+                    }
+                    return spawnedTask;
+                })
+            );
         }
     }
     } catch (err) {

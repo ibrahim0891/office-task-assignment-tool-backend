@@ -156,62 +156,73 @@ export const removeMember = async (
     userId: string,
     actingUserId: string,
 ) => {
-    const leaders = await prisma.userTeam.findMany({
-        where: { teamId, role: Role.LEADER },
-    });
-    const reassignedLeaderId = leaders[0]?.userId || actingUserId;
+    const [leaders, columns, memberTasks] = await Promise.all([
+        prisma.userTeam.findMany({
+            where: { teamId, role: Role.LEADER },
+            select: { userId: true },
+        }),
+        prisma.taskColumn.findMany({
+            where: { teamId },
+            select: { id: true, name: true },
+        }),
+        prisma.task.findMany({
+            where: {
+                teamId,
+                assignedToId: userId,
+                isSoftDeleted: false,
+                column: { isComplete: false },
+            },
+            select: { id: true, title: true },
+        }),
+    ]);
 
-    const columns = await prisma.taskColumn.findMany({
-        where: { teamId },
-    });
+    const reassignedLeaderId = leaders[0]?.userId || actingUserId;
     const needAttentionCol =
         columns.find((c) => c.name.toLowerCase() === "need attention later") ||
         columns.find((c) => c.name.toLowerCase().includes("attention")) ||
         columns[0];
 
-    const memberTasks = await prisma.task.findMany({
-        where: {
-            teamId,
-            assignedToId: userId,
-            isSoftDeleted: false,
-            column: { isComplete: false },
-        },
-    });
+    const taskIds = memberTasks.map((t) => t.id);
 
-    for (const task of memberTasks) {
-        await prisma.task.update({
-            where: { id: task.id },
-            data: {
-                assignedToId: reassignedLeaderId,
-                columnId: needAttentionCol.id,
-            },
-        });
+    if (taskIds.length > 0) {
+        const activitiesData = taskIds.map((taskId) => ({
+            taskId,
+            userId: actingUserId,
+            actionType: "STATUS_CHANGE",
+            details: JSON.stringify({
+                note: "Assignee left team. Task reassigned to leader and flagged as Need Attention.",
+                oldAssigneeId: userId,
+                newAssigneeId: reassignedLeaderId,
+                newColumn: needAttentionCol?.name || "Need Attention",
+            }),
+        }));
 
-        await prisma.taskActivity.create({
-            data: {
-                taskId: task.id,
-                userId: actingUserId,
-                actionType: "STATUS_CHANGE",
-                details: JSON.stringify({
-                    note: "Assignee left team. Task reassigned to leader and flagged as Need Attention.",
-                    oldAssigneeId: userId,
-                    newAssigneeId: reassignedLeaderId,
-                    newColumn: needAttentionCol.name,
-                }),
-            },
-        });
+        await prisma.$transaction([
+            prisma.task.updateMany({
+                where: { id: { in: taskIds } },
+                data: {
+                    assignedToId: reassignedLeaderId,
+                    columnId: needAttentionCol?.id,
+                },
+            }),
+            prisma.taskActivity.createMany({
+                data: activitiesData,
+            }),
+            prisma.userTeam.delete({
+                where: { userId_teamId: { userId, teamId } },
+            }),
+        ]);
 
         await createNotification({
             userId: reassignedLeaderId,
-            content: `Task "${task.title}" reassigned to you because the assignee was removed from the team.`,
+            content: `${taskIds.length} active task${taskIds.length === 1 ? "" : "s"} reassigned to you because a team member was removed.`,
             type: "NEED_ATTENTION",
-            taskId: task.id,
+        });
+    } else {
+        await prisma.userTeam.delete({
+            where: { userId_teamId: { userId, teamId } },
         });
     }
-
-    await prisma.userTeam.delete({
-        where: { userId_teamId: { userId, teamId } },
-    });
 
     return memberTasks.length;
 };
@@ -318,25 +329,25 @@ export const createNewTeam = async (
             triggersCarryForward: true,
         },
         {
-            name: "Blocked",
+            name: "Done",
             order: 3,
             wipLimit: null,
-            isComplete: false,
-            triggersCarryForward: true,
+            isComplete: true,
+            triggersCarryForward: false,
         },
         {
-            name: "Need Attention Later",
+            name: "Blocked",
             order: 4,
             wipLimit: null,
             isComplete: false,
             triggersCarryForward: true,
         },
         {
-            name: "Done",
+            name: "Need Attention Later",
             order: 5,
             wipLimit: null,
-            isComplete: true,
-            triggersCarryForward: false,
+            isComplete: false,
+            triggersCarryForward: true,
         },
         {
             name: "Cancelled",
@@ -419,19 +430,18 @@ export const deleteTeamCascading = async (
                 teamId: teamId,
             },
         },
+        select: { id: true, url: true },
     });
 
-    for (const att of attachments) {
-        if (att.url) {
-            try {
-                await deleteFromCloudinary(att.url);
-            } catch (e) {
-                console.error(
-                    `Failed to delete Cloudinary asset for attachment ${att.id}:`,
-                    e,
-                );
-            }
-        }
+    const urlsToDelete = attachments.filter((a) => a.url).map((a) => a.url);
+    if (urlsToDelete.length > 0) {
+        await Promise.allSettled(
+            urlsToDelete.map((url) =>
+                deleteFromCloudinary(url).catch((e) =>
+                    console.error("Failed to delete Cloudinary asset:", url, e)
+                )
+            )
+        );
     }
 
     await prisma.team.delete({

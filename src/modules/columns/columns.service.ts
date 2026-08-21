@@ -83,16 +83,16 @@ export const deleteColumnItem = async (teamId: string, columnId: string) => {
 
     const fallbackColId = otherColumns[0].id;
 
-    // Move tasks to fallback column
-    await prisma.task.updateMany({
-        where: { columnId },
-        data: { columnId: fallbackColId },
-    });
-
-    // Delete the column
-    await prisma.taskColumn.delete({
-        where: { id: columnId },
-    });
+    // Move tasks to fallback column and delete the column atomically
+    await prisma.$transaction([
+        prisma.task.updateMany({
+            where: { columnId },
+            data: { columnId: fallbackColId },
+        }),
+        prisma.taskColumn.delete({
+            where: { id: columnId },
+        }),
+    ]);
 
     return otherColumns[0].name;
 };

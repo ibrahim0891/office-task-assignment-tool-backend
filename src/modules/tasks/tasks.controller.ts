@@ -322,6 +322,24 @@ export const getTask = async (req: Request, res: Response) => {
     }
 };
 
+export const clearTaskActivities = async (req: Request, res: Response) => {
+    const { taskId } = req.params;
+    const actingUserId = (req.headers["x-user-id"] as string) || (req as any).user?.userId;
+
+    try {
+        const result = await tasksService.clearTaskActivities(taskId, actingUserId);
+        sendResponse(res, 200, result);
+    } catch (error: any) {
+        if (error.message === "Task not found.") {
+            return sendResponse(res, 404, { error: error.message });
+        }
+        if (error.message.includes("Only") || error.message.includes("Access denied")) {
+            return sendResponse(res, 403, { error: error.message });
+        }
+        sendResponse(res, 500, { error: error.message });
+    }
+};
+
 export const getTaskActivities = async (req: Request, res: Response) => {
     const { taskId } = req.params;
     const page = parseInt(req.query.page as string, 10) || 1;

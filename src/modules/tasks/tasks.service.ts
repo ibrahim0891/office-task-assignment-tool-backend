@@ -109,6 +109,9 @@ export const getTasksList = async (query: any, actingUserId?: string, userRole?:
                 select: { id: true, name: true, avatarUrl: true }
             },
             checklist: true,
+            _count: {
+                select: { comments: true, attachments: true },
+            },
         },
         orderBy: { createdAt: "desc" },
     });
@@ -178,6 +181,9 @@ export const createTaskItem = async (body: any, isMember: boolean) => {
                 select: { id: true, name: true, avatarUrl: true }
             },
             checklist: true,
+            _count: {
+                select: { comments: true, attachments: true },
+            },
         },
     });
 
@@ -190,8 +196,7 @@ export const createTaskItem = async (body: any, isMember: boolean) => {
         },
     });
 
-    const creatorUser = await prisma.user.findUnique({ where: { id: createdById } });
-    const creatorName = creatorUser?.name || "Someone";
+    const creatorName = task.createdBy?.name || "Someone";
     await notifyTeamLeader(
         teamId,
         `${creatorName} created task: "${title}".`,
@@ -289,13 +294,17 @@ export const updateTaskItem = async (taskId: string, body: any, actingUserId: st
         };
     }
 
+    let newUser: { name: string } | null = null;
     if (assignedToId !== undefined && assignedToId !== task.assignedToId) {
         if (isMember && assignedToId !== actingUserId) {
             throw new Error("Standard members can only assign tasks to themselves.");
         }
         updateData.assignedToId = assignedToId;
-        const oldUser = await prisma.user.findUnique({ where: { id: task.assignedToId } });
-        const newUser = await prisma.user.findUnique({ where: { id: assignedToId } });
+        const [oldUser, fetchedNewUser] = await Promise.all([
+            prisma.user.findUnique({ where: { id: task.assignedToId }, select: { name: true } }),
+            prisma.user.findUnique({ where: { id: assignedToId }, select: { name: true } }),
+        ]);
+        newUser = fetchedNewUser;
         detailsChanges.assignedTo = {
             from: oldUser?.name || "Unassigned",
             to: newUser?.name || "Unassigned",
@@ -333,46 +342,41 @@ export const updateTaskItem = async (taskId: string, body: any, actingUserId: st
                 select: { id: true, name: true, avatarUrl: true }
             },
             checklist: true,
+            _count: {
+                select: { comments: true, attachments: true },
+            },
         }
     });
 
     if (Object.keys(detailsChanges).length > 0) {
         const actionType = changingStatus ? "STATUS_CHANGE" : "EDIT";
-        await prisma.taskActivity.create({
-            data: {
-                taskId,
-                userId: actingUserId,
-                actionType,
-                details: JSON.stringify(detailsChanges),
-            },
-        });
-
-        // Notify team leader of column moves or reassignments
-        const actor = await prisma.user.findUnique({ where: { id: actingUserId } });
+        const actor = await prisma.user.findUnique({ where: { id: actingUserId }, select: { name: true } });
         const actorName = actor?.name || "Someone";
-        // Suppress notifications on column moves to prevent spamming the leader on frequent task updates
-        /*
-        if (columnId && columnId !== task.columnId) {
-            const newCol = await prisma.taskColumn.findUnique({ where: { id: columnId } });
-            await notifyTeamLeader(
-                task.teamId,
-                `${actorName} moved task "${updatedTask.title}" to "${newCol?.name || 'New Column'}".`,
-                "TASK_MOVED",
-                taskId,
-                actingUserId
-            );
-        }
-        */
+
+        const postUpdatePromises: Promise<any>[] = [
+            prisma.taskActivity.create({
+                data: {
+                    taskId,
+                    userId: actingUserId,
+                    actionType,
+                    details: JSON.stringify(detailsChanges),
+                },
+            }),
+        ];
+
         if (assignedToId && assignedToId !== task.assignedToId) {
-            const newUser = await prisma.user.findUnique({ where: { id: assignedToId } });
-            await notifyTeamLeader(
-                task.teamId,
-                `${actorName} reassigned task "${updatedTask.title}" to ${newUser?.name || 'Unassigned'}.`,
-                "TASK_REASSIGNED",
-                taskId,
-                actingUserId
+            postUpdatePromises.push(
+                notifyTeamLeader(
+                    task.teamId,
+                    `${actorName} reassigned task "${updatedTask.title}" to ${newUser?.name || 'Unassigned'}.`,
+                    "TASK_REASSIGNED",
+                    taskId,
+                    actingUserId
+                )
             );
         }
+
+        await Promise.all(postUpdatePromises);
     }
 
     if (assignedToId && assignedToId !== task.assignedToId) {
@@ -388,56 +392,72 @@ export const updateTaskItem = async (taskId: string, body: any, actingUserId: st
 };
 
 export const softDeleteTaskItem = async (taskId: string, actingUserId: string) => {
-    const task = await prisma.task.findUnique({
-        where: { id: taskId },
-    });
+    const [task, membership, actor] = await Promise.all([
+        prisma.task.findUnique({
+            where: { id: taskId },
+            select: { id: true, teamId: true, createdById: true, title: true },
+        }),
+        prisma.userTeam.findFirst({
+            where: { userId: actingUserId },
+            select: { role: true, teamId: true },
+        }),
+        prisma.user.findUnique({
+            where: { id: actingUserId },
+            select: { name: true },
+        }),
+    ]);
 
     if (!task) {
         throw new Error("Task not found.");
     }
 
-    const membership = await prisma.userTeam.findUnique({
-        where: { userId_teamId: { userId: actingUserId, teamId: task.teamId } },
-    });
-
-    const isLeader = membership?.role === "LEADER";
+    const isLeader = membership?.role === "LEADER" && membership?.teamId === task.teamId;
     const isCreator = task.createdById === actingUserId;
 
     if (!isLeader && !isCreator) {
         throw new Error("Only the task creator or workspace leader can delete this task.");
     }
 
-    const deletedTask = await prisma.task.update({
-        where: { id: taskId },
-        data: { isSoftDeleted: true },
-    });
-
-    await prisma.taskActivity.create({
-        data: {
-            taskId,
-            userId: actingUserId,
-            actionType: "DELETE",
-            details: JSON.stringify({ note: "Task soft deleted." }),
-        },
-    });
-
-    const actor = await prisma.user.findUnique({ where: { id: actingUserId } });
-    const actorName = actor?.name || "Someone";
-    await notifyTeamLeader(
-        task.teamId,
-        `${actorName} deleted task "${task.title}".`,
-        "TASK_DELETED",
-        undefined,
-        actingUserId
-    );
+    const [deletedTask] = await Promise.all([
+        prisma.task.update({
+            where: { id: taskId },
+            data: { isSoftDeleted: true },
+        }),
+        prisma.taskActivity.create({
+            data: {
+                taskId,
+                userId: actingUserId,
+                actionType: "DELETE",
+                details: JSON.stringify({ note: "Task soft deleted." }),
+            },
+        }),
+        notifyTeamLeader(
+            task.teamId,
+            `${actor?.name || "Someone"} deleted task "${task.title}".`,
+            "TASK_DELETED",
+            undefined,
+            actingUserId
+        ),
+    ]);
 
     return deletedTask;
 };
 
 export const restoreTaskItem = async (taskId: string, actingUserId: string) => {
-    const task = await prisma.task.findUnique({
-        where: { id: taskId },
-    });
+    const [task, deleteActivity] = await Promise.all([
+        prisma.task.findUnique({
+            where: { id: taskId },
+            select: { id: true, teamId: true, createdById: true },
+        }),
+        prisma.taskActivity.findFirst({
+            where: {
+                taskId,
+                userId: actingUserId,
+                actionType: "DELETE",
+            },
+            select: { id: true },
+        }),
+    ]);
 
     if (!task) {
         throw new Error("Task not found.");
@@ -445,49 +465,53 @@ export const restoreTaskItem = async (taskId: string, actingUserId: string) => {
 
     const membership = await prisma.userTeam.findUnique({
         where: { userId_teamId: { userId: actingUserId, teamId: task.teamId } },
+        select: { role: true },
     });
 
     const isLeader = membership?.role === "LEADER";
     const isCreator = task.createdById === actingUserId;
-
-    // Check if acting user performed the DELETE activity for this task
-    const deleteActivity = await prisma.taskActivity.findFirst({
-        where: {
-            taskId,
-            userId: actingUserId,
-            actionType: "DELETE",
-        },
-    });
     const isDeleter = Boolean(deleteActivity);
 
     if (!isLeader && !isCreator && !isDeleter) {
         throw new Error("Access denied. Only the user who deleted/created the task or a workspace leader/co-leader can restore this task.");
     }
 
-    const restoredTask = await prisma.task.update({
-        where: { id: taskId },
-        data: { isSoftDeleted: false, isArchived: false },
-    });
-
-    await prisma.taskActivity.create({
-        data: {
-            taskId,
-            userId: actingUserId,
-            actionType: "EDIT",
-            details: JSON.stringify({ note: "Task restored from trash." }),
-        },
-    });
+    const [restoredTask] = await Promise.all([
+        prisma.task.update({
+            where: { id: taskId },
+            data: { isSoftDeleted: false, isArchived: false },
+        }),
+        prisma.taskActivity.create({
+            data: {
+                taskId,
+                userId: actingUserId,
+                actionType: "EDIT",
+                details: JSON.stringify({ note: "Task restored from trash." }),
+            },
+        }),
+    ]);
 
     return restoredTask;
 };
 
 export const permanentDeleteTaskItem = async (taskId: string) => {
-    await prisma.checklistItem.deleteMany({ where: { taskId } });
-    await prisma.comment.deleteMany({ where: { taskId } });
-    await prisma.attachment.deleteMany({ where: { taskId } });
-    await prisma.taskActivity.deleteMany({ where: { taskId } });
-    await prisma.notification.deleteMany({ where: { taskId } });
+    const attachments = await prisma.attachment.findMany({
+        where: { taskId },
+        select: { url: true },
+    });
 
+    const urlsToDelete = attachments.filter((a) => a.url).map((a) => a.url);
+    if (urlsToDelete.length > 0) {
+        await Promise.allSettled(
+            urlsToDelete.map((url) =>
+                deleteFromCloudinary(url).catch((e) =>
+                    console.error("Failed to delete Cloudinary asset:", url, e)
+                )
+            )
+        );
+    }
+
+    // PostgreSQL foreign key cascade automatically cleans up checklist, comments, attachments, activities, notifications
     await prisma.task.delete({
         where: { id: taskId },
     });
@@ -522,49 +546,43 @@ export const createTaskComment = async (taskId: string, userId: string, content:
 
     // Notify explicitly @mentioned users
     const mentions = content.match(/@(\w+)/g);
-    const task = await prisma.task.findUnique({
-        where: { id: taskId },
-        select: { title: true, teamId: true, assignedToId: true, createdById: true },
-    });
+    const [task, commenter] = await Promise.all([
+        prisma.task.findUnique({
+            where: { id: taskId },
+            select: { title: true, teamId: true, assignedToId: true, createdById: true },
+        }),
+        prisma.user.findUnique({
+            where: { id: userId },
+            select: { id: true, name: true },
+        }),
+    ]);
 
     if (!task) return comment;
 
     const mentionedUserIds = new Set<string>();
-    if (mentions) {
-        for (const mention of mentions) {
-            const namePart = mention.substring(1);
-            const mentionedUser = await prisma.user.findFirst({
-                where: { name: { contains: namePart, mode: "insensitive" } },
-            });
+    if (mentions && mentions.length > 0) {
+        const uniqueNames = Array.from(new Set(mentions.map((m) => m.substring(1))));
+        const mentionedUsers = await prisma.user.findMany({
+            where: {
+                OR: uniqueNames.map((name) => ({
+                    name: { contains: name, mode: "insensitive" },
+                })),
+            },
+            select: { id: true },
+        });
 
-            if (mentionedUser && mentionedUser.id !== userId) {
-                mentionedUserIds.add(mentionedUser.id);
-                await createNotification({
-                    userId: mentionedUser.id,
-                    content: `You were mentioned in a comment on task: "${content.substring(0, 40)}..."`,
-                    type: "COMMENT_MENTION",
-                    taskId,
-                    teamId: task.teamId
-                });
+        for (const u of mentionedUsers) {
+            if (u.id !== userId) {
+                mentionedUserIds.add(u.id);
             }
         }
     }
 
-    await prisma.taskActivity.create({
-        data: {
-            taskId,
-            userId,
-            actionType: "COMMENT",
-            details: JSON.stringify({ note: "Added comment." }),
-        },
-    });
-
-    const commenter = await prisma.user.findUnique({ where: { id: userId } });
     const commenterName = commenter?.name || "Someone";
     const snippet = content.length > 40 ? `${content.substring(0, 40)}...` : content;
     const notificationContent = `${commenterName} commented on task "${task.title}": "${snippet}"`;
 
-    // Collect the set of users to directly notify (assignee + creator), excluding commenter & already-mentioned
+    // Direct recipients (assignee + creator), excluding commenter & already-mentioned
     const directRecipients = new Set<string>();
     if (task.assignedToId && task.assignedToId !== userId && !mentionedUserIds.has(task.assignedToId)) {
         directRecipients.add(task.assignedToId);
@@ -573,25 +591,53 @@ export const createTaskComment = async (taskId: string, userId: string, content:
         directRecipients.add(task.createdById);
     }
 
-    for (const recipientId of directRecipients) {
-        await createNotification({
-            userId: recipientId,
-            content: notificationContent,
-            type: "COMMENT_MENTION",
-            taskId,
-            teamId: task.teamId
-        });
+    const notificationPromises: Promise<any>[] = [
+        prisma.taskActivity.create({
+            data: {
+                taskId,
+                userId,
+                actionType: "COMMENT",
+                details: JSON.stringify({ note: "Added comment." }),
+            },
+        }),
+    ];
+
+    for (const mentionedId of mentionedUserIds) {
+        notificationPromises.push(
+            createNotification({
+                userId: mentionedId,
+                content: `You were mentioned in a comment on task: "${content.substring(0, 40)}..."`,
+                type: "COMMENT_MENTION",
+                taskId,
+                teamId: task.teamId,
+            })
+        );
     }
 
-    // Also notify team leaders (excluding the commenter and anyone already notified)
-    await notifyTeamLeader(
-        task.teamId,
-        notificationContent,
-        "COMMENT_MENTION",
-        taskId,
-        userId,
-        Array.from(new Set([...directRecipients, ...mentionedUserIds]))
+    for (const recipientId of directRecipients) {
+        notificationPromises.push(
+            createNotification({
+                userId: recipientId,
+                content: notificationContent,
+                type: "COMMENT_MENTION",
+                taskId,
+                teamId: task.teamId,
+            })
+        );
+    }
+
+    notificationPromises.push(
+        notifyTeamLeader(
+            task.teamId,
+            notificationContent,
+            "COMMENT_MENTION",
+            taskId,
+            userId,
+            Array.from(new Set([...directRecipients, ...mentionedUserIds]))
+        )
     );
+
+    await Promise.all(notificationPromises);
 
     return comment;
 };
@@ -623,21 +669,26 @@ export const resolveTaskComment = async (taskId: string, commentId: string, acti
     });
 
     if (actingUserId) {
-        await prisma.taskActivity.create({
-            data: {
-                taskId,
-                userId: actingUserId,
-                actionType: "COMMENT",
-                details: JSON.stringify({ note: "Resolved comment." }),
-            },
-        });
+        const [task, user] = await Promise.all([
+            prisma.task.findUnique({
+                where: { id: taskId },
+                select: { title: true, teamId: true },
+            }),
+            prisma.user.findUnique({
+                where: { id: actingUserId },
+                select: { name: true },
+            }),
+            prisma.taskActivity.create({
+                data: {
+                    taskId,
+                    userId: actingUserId,
+                    actionType: "COMMENT",
+                    details: JSON.stringify({ note: "Resolved comment." }),
+                },
+            }),
+        ]);
 
-        const task = await prisma.task.findUnique({
-            where: { id: taskId },
-            select: { title: true, teamId: true },
-        });
         if (task) {
-            const user = await prisma.user.findUnique({ where: { id: actingUserId } });
             const userName = user?.name || "Someone";
             await notifyTeamLeader(
                 task.teamId,
@@ -662,21 +713,26 @@ export const reopenTaskComment = async (taskId: string, commentId: string, actin
     });
 
     if (actingUserId) {
-        await prisma.taskActivity.create({
-            data: {
-                taskId,
-                userId: actingUserId,
-                actionType: "COMMENT",
-                details: JSON.stringify({ note: "Reopened comment." }),
-            },
-        });
+        const [task, user] = await Promise.all([
+            prisma.task.findUnique({
+                where: { id: taskId },
+                select: { title: true, teamId: true },
+            }),
+            prisma.user.findUnique({
+                where: { id: actingUserId },
+                select: { name: true },
+            }),
+            prisma.taskActivity.create({
+                data: {
+                    taskId,
+                    userId: actingUserId,
+                    actionType: "COMMENT",
+                    details: JSON.stringify({ note: "Reopened comment." }),
+                },
+            }),
+        ]);
 
-        const task = await prisma.task.findUnique({
-            where: { id: taskId },
-            select: { title: true, teamId: true },
-        });
         if (task) {
-            const user = await prisma.user.findUnique({ where: { id: actingUserId } });
             const userName = user?.name || "Someone";
             await notifyTeamLeader(
                 task.teamId,
@@ -789,6 +845,9 @@ export const getTaskItem = async (taskId: string) => {
                 assignedTo: {
                     select: { id: true, name: true, avatarUrl: true }
                 },
+                _count: {
+                    select: { comments: true, attachments: true },
+                },
             },
         }),
         prisma.checklistItem.findMany({
@@ -810,48 +869,82 @@ export const getTaskItem = async (taskId: string) => {
     };
 };
 
-export const getTaskActivities = async (taskId: string, page = 1, limit = 15) => {
-    const activities = await prisma.taskActivity.findMany({
-        where: { taskId },
-        include: {
-            user: {
-                select: { id: true, name: true, avatarUrl: true }
-            }
-        },
-        orderBy: { createdAt: "desc" },
-        skip: (page - 1) * limit,
-        take: limit,
+export const clearTaskActivities = async (taskId: string, actingUserId: string) => {
+    const task = await prisma.task.findUnique({
+        where: { id: taskId },
     });
 
-    const totalCount = await prisma.taskActivity.count({ where: { taskId } });
+    if (!task) {
+        throw new Error("Task not found.");
+    }
+
+    const membership = await prisma.userTeam.findUnique({
+        where: { userId_teamId: { userId: actingUserId, teamId: task.teamId } },
+    });
+
+    const isLeader = membership?.role === "LEADER";
+    const isCreator = task.createdById === actingUserId;
+
+    if (!isCreator && !isLeader) {
+        throw new Error("Only the task creator or workspace leader can clear the activity log.");
+    }
+
+    await prisma.taskActivity.deleteMany({
+        where: { taskId },
+    });
+
+    return {
+        success: true,
+        message: "Activity logs cleared successfully."
+    };
+};
+
+export const getTaskActivities = async (taskId: string, page = 1, limit = 15) => {
+    const [activities, totalCount] = await Promise.all([
+        prisma.taskActivity.findMany({
+            where: { taskId },
+            include: {
+                user: {
+                    select: { id: true, name: true, avatarUrl: true },
+                },
+            },
+            orderBy: { createdAt: "desc" },
+            skip: (page - 1) * limit,
+            take: limit,
+        }),
+        prisma.taskActivity.count({ where: { taskId } }),
+    ]);
+
     const hasMore = page * limit < totalCount;
 
     return {
         activities,
         totalCount,
         hasMore,
-        page
+        page,
     };
 };
 
 export const getTaskComments = async (taskId: string, page = 1, limit = 15) => {
-    const comments = await prisma.comment.findMany({
-        where: { taskId },
-        include: {
-            user: {
-                select: { id: true, name: true, avatarUrl: true }
-            }
-        },
-        orderBy: { createdAt: "desc" },
-        skip: (page - 1) * limit,
-        take: limit,
-    });
+    const [comments, totalCount] = await Promise.all([
+        prisma.comment.findMany({
+            where: { taskId },
+            include: {
+                user: {
+                    select: { id: true, name: true, avatarUrl: true },
+                },
+            },
+            orderBy: { createdAt: "desc" },
+            skip: (page - 1) * limit,
+            take: limit,
+        }),
+        prisma.comment.count({ where: { taskId } }),
+    ]);
 
-    const totalCount = await prisma.comment.count({ where: { taskId } });
     const hasMore = page * limit < totalCount;
 
     return {
         comments: comments.reverse(),
-        hasMore
+        hasMore,
     };
 };

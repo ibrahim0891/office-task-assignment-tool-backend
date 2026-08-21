@@ -19,6 +19,7 @@ router.post("/tasks/:taskId/checklist", requireTaskOwnerOrLeaderOrAssignee, task
 router.put("/tasks/:taskId/checklist/:itemId", requireTaskOwnerOrLeaderOrAssignee, tasksController.updateChecklistItem);
 router.delete("/tasks/:taskId/checklist/:itemId", requireTaskOwnerOrLeaderOrAssignee, tasksController.deleteChecklistItem);
 router.get("/tasks/:taskId/activities", requireTaskOwnerOrLeaderOrAssignee, tasksController.getTaskActivities);
+router.delete("/tasks/:taskId/activities", requireTaskOwnerOrLeaderOrAssignee, tasksController.clearTaskActivities);
 router.get("/tasks/:taskId/comments", requireTaskOwnerOrLeaderOrAssignee, tasksController.getComments);
 router.post("/tasks/:taskId/comments", requireTaskOwnerOrLeaderOrAssignee, tasksController.createComment);
 router.delete("/tasks/:taskId/comments/:commentId", requireCommentOwner, tasksController.deleteComment);
