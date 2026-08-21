@@ -1,8 +1,19 @@
 import { prisma, Role } from "../../config/prisma";
 import { parseLocalDate, getLocalDateString } from "../../utils/date";
-import { createNotification } from "../notifications/notifications.service";
+
+// In-memory cache to prevent running heavy carry-forward repeatedly on rapid consecutive requests
+const lastRunMap = new Map<string, number>();
+const CACHE_TTL_MS = 60 * 1000; // 1 minute cooldown per team + date
 
 export async function runCarryForwardAndRecurring(teamId: string, dateStr: string) {
+    const cacheKey = `${teamId}:${dateStr}`;
+    const lastRun = lastRunMap.get(cacheKey);
+    const now = Date.now();
+    if (lastRun && now - lastRun < CACHE_TTL_MS) {
+        return; // Already executed recently for this workspace and date
+    }
+    lastRunMap.set(cacheKey, now);
+
     const targetDate = parseLocalDate(dateStr);
 
     // 1. CARRY FORWARD LOGIC
@@ -32,75 +43,82 @@ export async function runCarryForwardAndRecurring(teamId: string, dateStr: strin
         },
     });
 
-    for (const task of incompleteTasks) {
-        // Calculate calendar days elapsed since original date
-        const daysElapsed = Math.floor(
-            (targetDate.getTime() - task.originalDate.getTime()) /
-                (1000 * 60 * 60 * 24),
-        );
-        if (daysElapsed <= 0) {
-            continue; // Safety: Never carry forward tasks on the same calendar day
-        }
+    if (incompleteTasks.length > 0) {
+        const operations: any[] = [];
+        const activitiesToCreate: any[] = [];
+        const notificationsToCreate: any[] = [];
 
-        // We get the "Need Attention Later" column or the fallback column
-        const needAttentionCol =
-            task.team.columns.find(
-                (c) => c.name.toLowerCase() === "need attention later",
-            ) ||
-            task.team.columns.find((c) =>
-                c.name.toLowerCase().includes("attention"),
-            ) ||
-            task.team.columns[0];
+        for (const task of incompleteTasks) {
+            // Calculate calendar days elapsed since original date
+            const daysElapsed = Math.floor(
+                (targetDate.getTime() - task.originalDate.getTime()) /
+                    (1000 * 60 * 60 * 24),
+            );
+            if (daysElapsed <= 0) {
+                continue; // Safety: Never carry forward tasks on the same calendar day
+            }
 
-        const currentCarryCount = task.carryCount + 1;
+            // We get the "Need Attention Later" column or the fallback column
+            const needAttentionCol =
+                task.team.columns.find(
+                    (c) => c.name.toLowerCase() === "need attention later",
+                ) ||
+                task.team.columns.find((c) =>
+                    c.name.toLowerCase().includes("attention"),
+                ) ||
+                task.team.columns[0];
 
-        if (daysElapsed >= 3 || currentCarryCount >= 3) {
-            // Auto-flag task as Need Attention Later
-            await prisma.task.update({
-                where: { id: task.id },
-                data: {
-                    date: targetDate,
-                    carryCount: currentCarryCount,
-                    columnId: needAttentionCol.id,
-                },
-            });
+            const currentCarryCount = task.carryCount + 1;
 
-            // Audit Log
-            await prisma.taskActivity.create({
-                data: {
+            if (daysElapsed >= 3 || currentCarryCount >= 3) {
+                // Auto-flag task as Need Attention Later
+                operations.push(
+                    prisma.task.update({
+                        where: { id: task.id },
+                        data: {
+                            date: targetDate,
+                            carryCount: currentCarryCount,
+                            columnId: needAttentionCol.id,
+                        },
+                    }),
+                );
+
+                // Audit Log
+                activitiesToCreate.push({
                     taskId: task.id,
-                    userId: task.createdById, // System action, log creator or a system identifier
+                    userId: task.createdById,
                     actionType: "STATUS_CHANGE",
                     details: JSON.stringify({
                         from: task.column.name,
                         to: needAttentionCol.name,
                         reason: `Auto-flagged after carrying forward for ${currentCarryCount} days.`,
                     }),
-                },
-            });
-
-            // Notify Leader(s)
-            for (const membership of task.team.members) {
-                await createNotification({
-                    userId: membership.userId,
-                    content: `Task "${task.title}" has been carried forward for 3 days and auto-flagged as "${needAttentionCol.name}".`,
-                    type: "NEED_ATTENTION",
-                    taskId: task.id,
                 });
-            }
-        } else {
-            // Move task to target date
-            await prisma.task.update({
-                where: { id: task.id },
-                data: {
-                    date: targetDate,
-                    carryCount: currentCarryCount,
-                },
-            });
 
-            // Audit Log
-            await prisma.taskActivity.create({
-                data: {
+                // Notify Leader(s)
+                for (const membership of task.team.members) {
+                    notificationsToCreate.push({
+                        userId: membership.userId,
+                        content: `Task "${task.title}" has been carried forward for 3 days and auto-flagged as "${needAttentionCol.name}".`,
+                        type: "NEED_ATTENTION",
+                        taskId: task.id,
+                        teamId: task.teamId,
+                    });
+                }
+            } else {
+                // Move task to target date
+                operations.push(
+                    prisma.task.update({
+                        where: { id: task.id },
+                        data: {
+                            date: targetDate,
+                            carryCount: currentCarryCount,
+                        },
+                    }),
+                );
+
+                // Audit Log
+                activitiesToCreate.push({
                     taskId: task.id,
                     userId: task.createdById,
                     actionType: "EDIT",
@@ -110,58 +128,77 @@ export async function runCarryForwardAndRecurring(teamId: string, dateStr: strin
                         to_date: dateStr,
                         new_carry_count: currentCarryCount,
                     }),
-                },
-            });
+                });
+            }
+        }
+
+        if (activitiesToCreate.length > 0) {
+            operations.push(
+                prisma.taskActivity.createMany({
+                    data: activitiesToCreate,
+                }),
+            );
+        }
+
+        if (notificationsToCreate.length > 0) {
+            operations.push(
+                prisma.notification.createMany({
+                    data: notificationsToCreate,
+                }),
+            );
+        }
+
+        if (operations.length > 0) {
+            await prisma.$transaction(operations);
         }
     }
 
     // 2. RECURRING TASKS GENERATION
     // Find task templates in this team. Templates are marked isRecurring = true
-    // and we store them or identify them. Here, any task with isRecurring: true
-    // acts as a template. If no instance of this recurring task exists on targetDate, we spawn one.
     const recurringTemplates = await prisma.task.findMany({
         where: {
             teamId,
             isRecurring: true,
-            parentTaskId: null, // Templates don't have parent tasks
+            parentTaskId: null,
             isSoftDeleted: false,
+        },
+        include: {
+            checklist: true,
         },
     });
 
-    const dayOfWeek = targetDate.getDay(); // 0 = Sunday, 1 = Monday, etc.
-    const dayOfMonth = targetDate.getDate();
+    if (recurringTemplates.length > 0) {
+        const dayOfWeek = targetDate.getUTCDay();
+        const dayOfMonth = targetDate.getUTCDate();
 
-    for (const template of recurringTemplates) {
-        let shouldSpawn = false;
+        // Batch check existing instances in 1 single query instead of N queries
+        const templateTitles = recurringTemplates.map((t) => t.title);
+        const existingInstances = await prisma.task.findMany({
+            where: {
+                teamId,
+                title: { in: templateTitles },
+                date: targetDate,
+                isRecurring: false,
+                isSoftDeleted: false,
+            },
+            select: { title: true },
+        });
+        const existingSet = new Set(existingInstances.map((e) => e.title));
 
-        if (template.recurrence === "DAILY") {
-            shouldSpawn = true;
-        } else if (template.recurrence === "WEEKLY") {
-            // Spawn if targetDate matches originalTemplate day of week
-            const templateDayOfWeek = new Date(template.originalDate).getDay();
-            shouldSpawn = dayOfWeek === templateDayOfWeek;
-        } else if (template.recurrence === "MONTHLY") {
-            // Spawn if targetDate matches originalTemplate day of month
-            const templateDayOfMonth = new Date(
-                template.originalDate,
-            ).getDate();
-            shouldSpawn = dayOfMonth === templateDayOfMonth;
-        }
+        for (const template of recurringTemplates) {
+            let shouldSpawn = false;
 
-        if (shouldSpawn) {
-            // Check if instance already exists on this targetDate
-            const existingInstance = await prisma.task.findFirst({
-                where: {
-                    teamId,
-                    title: template.title,
-                    date: targetDate,
-                    isRecurring: false, // The instance is a regular task copy
-                    isSoftDeleted: false,
-                },
-            });
+            if (template.recurrence === "DAILY") {
+                shouldSpawn = true;
+            } else if (template.recurrence === "WEEKLY") {
+                const templateDayOfWeek = new Date(template.originalDate).getUTCDay();
+                shouldSpawn = dayOfWeek === templateDayOfWeek;
+            } else if (template.recurrence === "MONTHLY") {
+                const templateDayOfMonth = new Date(template.originalDate).getUTCDate();
+                shouldSpawn = dayOfMonth === templateDayOfMonth;
+            }
 
-            if (!existingInstance) {
-                // Spawn instance!
+            if (shouldSpawn && !existingSet.has(template.title)) {
                 const spawnedTask = await prisma.task.create({
                     data: {
                         teamId: template.teamId,
@@ -175,9 +212,7 @@ export async function runCarryForwardAndRecurring(teamId: string, dateStr: strin
                             ? new Date(
                                   targetDate.getTime() +
                                       (new Date(template.dueDate).getTime() -
-                                          new Date(
-                                              template.originalDate,
-                                          ).getTime()),
+                                          new Date(template.originalDate).getTime()),
                               )
                             : null,
                         createdById: template.createdById,
@@ -185,30 +220,12 @@ export async function runCarryForwardAndRecurring(teamId: string, dateStr: strin
                         estimatedTime: template.estimatedTime,
                         actualTime: 0,
                         isRecurring: false,
-                        // Link back to template via parentTaskId or similar (optional)
                     },
                 });
 
-                // Audit Log
-                await prisma.taskActivity.create({
-                    data: {
-                        taskId: spawnedTask.id,
-                        userId: template.createdById,
-                        actionType: "CREATE",
-                        details: JSON.stringify({
-                            note: "Automatically spawned recurring task instance.",
-                        }),
-                    },
-                });
-
-                // Copy checklist items from template to instance
-                const templateChecklist = await prisma.checklistItem.findMany({
-                    where: { taskId: template.id },
-                });
-
-                if (templateChecklist.length > 0) {
+                if (template.checklist && template.checklist.length > 0) {
                     await prisma.checklistItem.createMany({
-                        data: templateChecklist.map((item) => ({
+                        data: template.checklist.map((item) => ({
                             taskId: spawnedTask.id,
                             title: item.title,
                             isCompleted: false,

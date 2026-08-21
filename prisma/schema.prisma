@@ -78,6 +78,7 @@ model UserTeam {
 
     @@unique([userId, teamId])
     @@index([teamId])
+    @@index([teamId, role])
 }
 
 model TaskColumn {
@@ -95,6 +96,7 @@ model TaskColumn {
     tasks Task[]
 
     @@unique([teamId, name])
+    @@index([teamId, order])
 }
 
 model Task {
@@ -134,11 +136,14 @@ model Task {
     activities  TaskActivity[]
 
     @@index([teamId, date, isSoftDeleted, isArchived])
+    @@index([teamId, isSoftDeleted, isArchived, date])
+    @@index([teamId, assignedToId, date, isSoftDeleted, isArchived])
+    @@index([teamId, createdById, date, isSoftDeleted, isArchived])
     @@index([columnId, isSoftDeleted, date])
     @@index([createdById])
     @@index([assignedToId, isSoftDeleted, isArchived])
+    @@index([originalDate])
     @@index([parentTaskId])
-    @@index([teamId, isSoftDeleted, isArchived, date])
     @@index([teamId, isRecurring, isSoftDeleted])
 }
 
@@ -153,6 +158,7 @@ model ChecklistItem {
     task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
 
     @@index([taskId])
+    @@index([taskId, isCompleted])
 }
 
 model Comment {
@@ -167,6 +173,7 @@ model Comment {
     user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
     @@index([taskId])
+    @@index([taskId, createdAt])
     @@index([userId])
 }
 
