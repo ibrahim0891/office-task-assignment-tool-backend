@@ -19,9 +19,9 @@ export const login = async (req: Request, res: Response) => {
 };
 
 export const register = async (req: Request, res: Response) => {
-    const { name, email, password } = req.body;
+    const { fullName, email, password } = req.body;
     try {
-        const result = await authService.registerUser(name, email, password);
+        const result = await authService.registerUser(fullName, email, password);
         sendResponse(res, 201, result);
     } catch (error: any) {
         if (error.message === "User with this email already exists.") {

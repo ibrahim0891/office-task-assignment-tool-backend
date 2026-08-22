@@ -154,7 +154,7 @@ export const generateCsvExport = async (
                 select: { name: true },
             },
             assignedTo: {
-                select: { name: true },
+                select: { fullName: true },
             },
         },
     });
@@ -162,7 +162,7 @@ export const generateCsvExport = async (
     let csv = "Task ID,Title,Status,Priority,Date,Due Date,Carry Count,Est Hours,Act Hours,Assignee\n";
     tasks.forEach((t) => {
         const escape = (str: string) => `"${str.replace(/"/g, '""')}"`;
-        const assigneeName = t.assignedTo?.name || "Unassigned";
+        const assigneeName = t.assignedTo?.fullName || "Unassigned";
         csv += `${t.id},${escape(t.title)},${escape(t.column.name)},${t.priority},${getLocalDateString(t.date)},${t.dueDate ? getLocalDateString(t.dueDate) : ""},${t.carryCount},${t.estimatedTime || 0},${t.actualTime || 0},${escape(assigneeName)}\n`;
     });
 

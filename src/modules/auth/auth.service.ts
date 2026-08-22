@@ -92,7 +92,7 @@ export const loginUser = async (email: string, passwordString: string) => {
     return { user, token };
 };
 
-export const registerUser = async (name: string, email: string, passwordString: string) => {
+export const registerUser = async (fullName: string, email: string, passwordString: string) => {
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) {
         throw new Error("User with this email already exists.");
@@ -102,7 +102,7 @@ export const registerUser = async (name: string, email: string, passwordString: 
 
     const user = await prisma.user.create({
         data: {
-            name,
+            fullName,
             email,
             password: passwordString,
             isVerified: false,
@@ -112,7 +112,7 @@ export const registerUser = async (name: string, email: string, passwordString: 
 
     // Automatically create a personal workspace for this member
     const personalTeam = await prisma.team.create({
-        data: { name: `${name.split(" ")[0]}'s Personal Space` },
+        data: { name: `${fullName.split(" ")[0]}'s Personal Space` },
     });
 
     // Create Default Kanban Columns (To Do -> Up Next -> In Progress -> Done -> Others)
@@ -151,7 +151,7 @@ export const registerUser = async (name: string, email: string, passwordString: 
             to: email,
             subject: "Verify your email - SM Technology",
             html: buildEmailTemplate(
-                name,
+                fullName,
                 "Thank you for registering. Please verify your email using the following 6-digit verification code:",
                 verificationCode,
                 "If you did not request this email, you can safely ignore it."
@@ -208,7 +208,7 @@ export const sendNewVerificationCode = async (email: string) => {
         to: email,
         subject: "Verify your email - SM Technology",
         html: buildEmailTemplate(
-            user.name,
+            user.fullName,
             "Your new 6-digit verification code is:",
             verificationCode,
             "If you did not request this email, you can safely ignore it."
@@ -237,7 +237,7 @@ export const sendResetPasswordCode = async (email: string) => {
         to: email,
         subject: "Reset your password - SM Technology",
         html: buildEmailTemplate(
-            user.name,
+            user.fullName,
             "We received a request to reset your password. Use the following 6-digit code to reset it:",
             resetCode,
             `This code expires in ${APP_CONFIG.RESET_CODE_EXPIRY_MINUTES} minutes. If you did not request a password reset, please ignore this email.`

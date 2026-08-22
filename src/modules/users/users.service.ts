@@ -18,7 +18,7 @@ export const queryUsers = async (search?: string) => {
     const whereClause: any = {};
     if (search) {
         whereClause.OR = [
-            { name: { contains: search, mode: "insensitive" } },
+            { fullName: { contains: search, mode: "insensitive" } },
             { email: { contains: search, mode: "insensitive" } },
             { designation: { contains: search, mode: "insensitive" } },
         ];
@@ -38,7 +38,7 @@ export const getUserProfileById = async (userId: string) => {
         where: { id: userId },
         select: {
             id: true,
-            name: true,
+            fullName: true,
             email: true,
             avatarUrl: true,
             secondaryEmail: true,
@@ -68,7 +68,7 @@ export const updateUserProfileById = async (userId: string, body: any) => {
     }
 
     const {
-        name,
+        fullName,
         avatarUrl,
         secondaryEmail,
         primaryPhone,
@@ -97,7 +97,7 @@ export const updateUserProfileById = async (userId: string, body: any) => {
     return prisma.user.update({
         where: { id: userId },
         data: {
-            ...(name !== undefined && { name }),
+            ...(fullName !== undefined && { fullName }),
             ...(finalAvatarUrl !== undefined && { avatarUrl: finalAvatarUrl }),
             ...(secondaryEmail !== undefined && { secondaryEmail }),
             ...(primaryPhone !== undefined && { primaryPhone }),
@@ -112,7 +112,7 @@ export const updateUserProfileById = async (userId: string, body: any) => {
         },
         select: {
             id: true,
-            name: true,
+            fullName: true,
             email: true,
             avatarUrl: true,
             secondaryEmail: true,

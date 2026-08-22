@@ -3,7 +3,7 @@ import { prisma } from "../../config/prisma";
 export const getArticlesByTeamId = async (teamId: string) => {
     return prisma.knowledgeArticle.findMany({
         where: { teamId },
-        include: { createdBy: { select: { id: true, name: true, avatarUrl: true } } },
+        include: { createdBy: { select: { id: true, fullName: true, avatarUrl: true } } },
         orderBy: { updatedAt: "desc" },
     });
 };
@@ -21,7 +21,7 @@ export const createArticleItem = async (data: {
             content: data.content || "",
             createdById: data.createdById,
         },
-        include: { createdBy: { select: { id: true, name: true, avatarUrl: true } } },
+        include: { createdBy: { select: { id: true, fullName: true, avatarUrl: true } } },
     });
 };
 
@@ -35,7 +35,7 @@ export const updateArticleItem = async (
     return prisma.knowledgeArticle.update({
         where: { id },
         data,
-        include: { createdBy: { select: { id: true, name: true, avatarUrl: true } } },
+        include: { createdBy: { select: { id: true, fullName: true, avatarUrl: true } } },
     });
 };
 
