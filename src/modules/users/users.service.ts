@@ -97,7 +97,7 @@ export const updateUserProfileById = async (userId: string, body: any) => {
     return prisma.user.update({
         where: { id: userId },
         data: {
-            ...(fullName !== undefined && { fullName }),
+            ...(fullName !== undefined && { fullName, name: fullName }),
             ...(finalAvatarUrl !== undefined && { avatarUrl: finalAvatarUrl }),
             ...(secondaryEmail !== undefined && { secondaryEmail }),
             ...(primaryPhone !== undefined && { primaryPhone }),
@@ -112,6 +112,7 @@ export const updateUserProfileById = async (userId: string, body: any) => {
         },
         select: {
             id: true,
+            name: true,
             fullName: true,
             email: true,
             avatarUrl: true,
