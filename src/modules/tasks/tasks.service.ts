@@ -103,10 +103,10 @@ export const getTasksList = async (query: any, actingUserId?: string, userRole?:
         include: {
             column: true,
             createdBy: {
-                select: { id: true, name: true, avatarUrl: true }
+                select: { id: true, fullName: true, avatarUrl: true }
             },
             assignedTo: {
-                select: { id: true, name: true, avatarUrl: true }
+                select: { id: true, fullName: true, avatarUrl: true }
             },
             checklist: true,
             _count: {
@@ -175,10 +175,10 @@ export const createTaskItem = async (body: any, isMember: boolean) => {
         include: {
             column: true,
             createdBy: {
-                select: { id: true, name: true, avatarUrl: true }
+                select: { id: true, fullName: true, avatarUrl: true }
             },
             assignedTo: {
-                select: { id: true, name: true, avatarUrl: true }
+                select: { id: true, fullName: true, avatarUrl: true }
             },
             checklist: true,
             _count: {
@@ -196,7 +196,7 @@ export const createTaskItem = async (body: any, isMember: boolean) => {
         },
     });
 
-    const creatorName = task.createdBy?.name || "Someone";
+    const creatorName = task.createdBy?.fullName || "Someone";
     await notifyTeamLeader(
         teamId,
         `${creatorName} created task: "${title}".`,
@@ -294,20 +294,20 @@ export const updateTaskItem = async (taskId: string, body: any, actingUserId: st
         };
     }
 
-    let newUser: { name: string } | null = null;
+    let newUser: { fullName: string } | null = null;
     if (assignedToId !== undefined && assignedToId !== task.assignedToId) {
         if (isMember && assignedToId !== actingUserId) {
             throw new Error("Standard members can only assign tasks to themselves.");
         }
         updateData.assignedToId = assignedToId;
         const [oldUser, fetchedNewUser] = await Promise.all([
-            prisma.user.findUnique({ where: { id: task.assignedToId }, select: { name: true } }),
-            prisma.user.findUnique({ where: { id: assignedToId }, select: { name: true } }),
+            prisma.user.findUnique({ where: { id: task.assignedToId }, select: { fullName: true } }),
+            prisma.user.findUnique({ where: { id: assignedToId }, select: { fullName: true } }),
         ]);
         newUser = fetchedNewUser;
         detailsChanges.assignedTo = {
-            from: oldUser?.name || "Unassigned",
-            to: newUser?.name || "Unassigned",
+            from: oldUser?.fullName || "Unassigned",
+            to: newUser?.fullName || "Unassigned",
         };
     }
 
@@ -336,10 +336,10 @@ export const updateTaskItem = async (taskId: string, body: any, actingUserId: st
         include: {
             column: true,
             createdBy: {
-                select: { id: true, name: true, avatarUrl: true }
+                select: { id: true, fullName: true, avatarUrl: true }
             },
             assignedTo: {
-                select: { id: true, name: true, avatarUrl: true }
+                select: { id: true, fullName: true, avatarUrl: true }
             },
             checklist: true,
             _count: {
@@ -350,8 +350,8 @@ export const updateTaskItem = async (taskId: string, body: any, actingUserId: st
 
     if (Object.keys(detailsChanges).length > 0) {
         const actionType = changingStatus ? "STATUS_CHANGE" : "EDIT";
-        const actor = await prisma.user.findUnique({ where: { id: actingUserId }, select: { name: true } });
-        const actorName = actor?.name || "Someone";
+        const actor = await prisma.user.findUnique({ where: { id: actingUserId }, select: { fullName: true } });
+        const actorName = actor?.fullName || "Someone";
 
         const postUpdatePromises: Promise<any>[] = [
             prisma.taskActivity.create({
@@ -368,7 +368,7 @@ export const updateTaskItem = async (taskId: string, body: any, actingUserId: st
             postUpdatePromises.push(
                 notifyTeamLeader(
                     task.teamId,
-                    `${actorName} reassigned task "${updatedTask.title}" to ${newUser?.name || 'Unassigned'}.`,
+                    `${actorName} reassigned task "${updatedTask.title}" to ${newUser?.fullName || 'Unassigned'}.`,
                     "TASK_REASSIGNED",
                     taskId,
                     actingUserId
@@ -403,7 +403,7 @@ export const softDeleteTaskItem = async (taskId: string, actingUserId: string) =
         }),
         prisma.user.findUnique({
             where: { id: actingUserId },
-            select: { name: true },
+            select: { fullName: true },
         }),
     ]);
 
@@ -433,7 +433,7 @@ export const softDeleteTaskItem = async (taskId: string, actingUserId: string) =
         }),
         notifyTeamLeader(
             task.teamId,
-            `${actor?.name || "Someone"} deleted task "${task.title}".`,
+            `${actor?.fullName || "Someone"} deleted task "${task.title}".`,
             "TASK_DELETED",
             undefined,
             actingUserId
@@ -540,7 +540,7 @@ export const createTaskComment = async (taskId: string, userId: string, content:
     const comment = await prisma.comment.create({
         data: { taskId, userId, content },
         include: {
-            user: { select: { id: true, name: true, avatarUrl: true } }
+            user: { select: { id: true, fullName: true, avatarUrl: true } }
         },
     });
 
@@ -553,32 +553,70 @@ export const createTaskComment = async (taskId: string, userId: string, content:
         }),
         prisma.user.findUnique({
             where: { id: userId },
-            select: { id: true, name: true },
+            select: { id: true, fullName: true },
         }),
     ]);
 
     if (!task) return comment;
 
     const mentionedUserIds = new Set<string>();
+    const lowerContent = content.toLowerCase();
+    const hasLeaderGroupMention = lowerContent.includes("@leaders") || lowerContent.includes("@leader");
+
+    // Fetch team members of this workspace
+    const teamMembers = await prisma.userTeam.findMany({
+        where: { teamId: task.teamId },
+        include: {
+            user: { select: { id: true, fullName: true } }
+        }
+    });
+
+    for (const tm of teamMembers) {
+        if (tm.userId === userId) continue;
+
+        // Mention notifications are strictly restricted to Leaders
+        if (tm.role !== "LEADER") {
+            continue;
+        }
+
+        const fullNameLower = tm.user.fullName.toLowerCase();
+        const firstNameLower = fullNameLower.split(" ")[0];
+
+        // 1. Group mention for Leaders
+        if (hasLeaderGroupMention) {
+            mentionedUserIds.add(tm.userId);
+        }
+        // 2. Individual leader mention by full name or first name
+        else if (
+            lowerContent.includes(`@${fullNameLower}`) ||
+            (firstNameLower.length >= 2 && lowerContent.includes(`@${firstNameLower}`))
+        ) {
+            mentionedUserIds.add(tm.userId);
+        }
+    }
+
+    // Fallback search for any other @word mentions
     if (mentions && mentions.length > 0) {
-        const uniqueNames = Array.from(new Set(mentions.map((m) => m.substring(1))));
-        const mentionedUsers = await prisma.user.findMany({
+        const uniqueNames = Array.from(new Set(mentions.map((m) => m.substring(1).toLowerCase())));
+        const extraUsers = await prisma.user.findMany({
             where: {
                 OR: uniqueNames.map((name) => ({
-                    name: { contains: name, mode: "insensitive" },
+                    fullName: { contains: name, mode: "insensitive" },
                 })),
             },
             select: { id: true },
         });
 
-        for (const u of mentionedUsers) {
-            if (u.id !== userId) {
+        const leaderUserIds = new Set(teamMembers.filter((tm) => tm.role === "LEADER").map((tm) => tm.userId));
+
+        for (const u of extraUsers) {
+            if (u.id !== userId && leaderUserIds.has(u.id)) {
                 mentionedUserIds.add(u.id);
             }
         }
     }
 
-    const commenterName = commenter?.name || "Someone";
+    const commenterName = commenter?.fullName || "Someone";
     const snippet = content.length > 40 ? `${content.substring(0, 40)}...` : content;
     const notificationContent = `${commenterName} commented on task "${task.title}": "${snippet}"`;
 
@@ -664,7 +702,7 @@ export const resolveTaskComment = async (taskId: string, commentId: string, acti
         where: { id: commentId },
         data: { resolved: true },
         include: {
-            user: { select: { id: true, name: true, avatarUrl: true } }
+            user: { select: { id: true, fullName: true, avatarUrl: true } }
         },
     });
 
@@ -676,7 +714,7 @@ export const resolveTaskComment = async (taskId: string, commentId: string, acti
             }),
             prisma.user.findUnique({
                 where: { id: actingUserId },
-                select: { name: true },
+                select: { fullName: true },
             }),
             prisma.taskActivity.create({
                 data: {
@@ -689,7 +727,7 @@ export const resolveTaskComment = async (taskId: string, commentId: string, acti
         ]);
 
         if (task) {
-            const userName = user?.name || "Someone";
+            const userName = user?.fullName || "Someone";
             await notifyTeamLeader(
                 task.teamId,
                 `${userName} resolved a comment on task "${task.title}".`,
@@ -708,7 +746,7 @@ export const reopenTaskComment = async (taskId: string, commentId: string, actin
         where: { id: commentId },
         data: { resolved: false },
         include: {
-            user: { select: { id: true, name: true, avatarUrl: true } }
+            user: { select: { id: true, fullName: true, avatarUrl: true } }
         },
     });
 
@@ -720,7 +758,7 @@ export const reopenTaskComment = async (taskId: string, commentId: string, actin
             }),
             prisma.user.findUnique({
                 where: { id: actingUserId },
-                select: { name: true },
+                select: { fullName: true },
             }),
             prisma.taskActivity.create({
                 data: {
@@ -733,7 +771,7 @@ export const reopenTaskComment = async (taskId: string, commentId: string, actin
         ]);
 
         if (task) {
-            const userName = user?.name || "Someone";
+            const userName = user?.fullName || "Someone";
             await notifyTeamLeader(
                 task.teamId,
                 `${userName} reopened a comment on task "${task.title}".`,
@@ -840,10 +878,10 @@ export const getTaskItem = async (taskId: string) => {
             include: {
                 column: true,
                 createdBy: {
-                    select: { id: true, name: true, avatarUrl: true }
+                    select: { id: true, fullName: true, avatarUrl: true }
                 },
                 assignedTo: {
-                    select: { id: true, name: true, avatarUrl: true }
+                    select: { id: true, fullName: true, avatarUrl: true }
                 },
                 _count: {
                     select: { comments: true, attachments: true },
@@ -905,7 +943,7 @@ export const getTaskActivities = async (taskId: string, page = 1, limit = 15) =>
             where: { taskId },
             include: {
                 user: {
-                    select: { id: true, name: true, avatarUrl: true },
+                    select: { id: true, fullName: true, avatarUrl: true },
                 },
             },
             orderBy: { createdAt: "desc" },
@@ -931,7 +969,7 @@ export const getTaskComments = async (taskId: string, page = 1, limit = 15) => {
             where: { taskId },
             include: {
                 user: {
-                    select: { id: true, name: true, avatarUrl: true },
+                    select: { id: true, fullName: true, avatarUrl: true },
                 },
             },
             orderBy: { createdAt: "desc" },

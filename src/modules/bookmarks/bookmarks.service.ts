@@ -3,7 +3,7 @@ import { prisma } from "../../config/prisma";
 export const getBookmarksByTeamId = async (teamId: string) => {
     return prisma.bookmark.findMany({
         where: { teamId },
-        include: { createdBy: { select: { id: true, name: true, avatarUrl: true } } },
+        include: { createdBy: { select: { id: true, fullName: true, avatarUrl: true } } },
         orderBy: { createdAt: "desc" },
     });
 };
@@ -17,7 +17,7 @@ export const createBookmarkItem = async (data: {
 }) => {
     return prisma.bookmark.create({
         data,
-        include: { createdBy: { select: { id: true, name: true, avatarUrl: true } } },
+        include: { createdBy: { select: { id: true, fullName: true, avatarUrl: true } } },
     });
 };
 
@@ -32,7 +32,7 @@ export const updateBookmarkItem = async (
     return prisma.bookmark.update({
         where: { id },
         data,
-        include: { createdBy: { select: { id: true, name: true, avatarUrl: true } } },
+        include: { createdBy: { select: { id: true, fullName: true, avatarUrl: true } } },
     });
 };
 
