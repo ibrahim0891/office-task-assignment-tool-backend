@@ -442,14 +442,25 @@ model ProjectInvitation {
   @@index([projectId, receiverId])
 }
 
+enum ProjectColumnType {
+  BACKLOG
+  TODO
+  IN_PROGRESS
+  NEED_ATTENTION
+  COMPLETED
+  CANCELLED
+  CUSTOM
+}
+
 model ProjectColumn {
-  id         String   @id @default(uuid())
+  id         String            @id @default(uuid())
   projectId  String
   name       String
+  type       ProjectColumnType @default(CUSTOM)
   order      Int
-  isComplete Boolean  @default(false)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  isComplete Boolean           @default(false)
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
 
   project Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
   tasks   ProjectTask[]

@@ -9,10 +9,12 @@ import {
 
 // Default columns created for every new project
 const DEFAULT_COLUMNS = [
-    { name: "Backlog", order: 0, isComplete: false },
-    { name: "In Progress", order: 1, isComplete: false },
-    { name: "In Review", order: 2, isComplete: false },
-    { name: "Done", order: 3, isComplete: true },
+    { name: "Backlog", order: 0, type: "BACKLOG" as const, isComplete: false },
+    { name: "To Do", order: 1, type: "TODO" as const, isComplete: false },
+    { name: "In Progress", order: 2, type: "IN_PROGRESS" as const, isComplete: false },
+    { name: "Need Attention", order: 3, type: "NEED_ATTENTION" as const, isComplete: false },
+    { name: "Completed", order: 4, type: "COMPLETED" as const, isComplete: true },
+    { name: "Cancelled", order: 5, type: "CANCELLED" as const, isComplete: false },
 ];
 
 function mapProjectStatus(status: string) {
@@ -27,21 +29,21 @@ function mapProjectStatus(status: string) {
 }
 
 function mapTaskStatus(task: any) {
-    if (task.column?.isComplete) return "Done";
+    const colType = task.column?.type;
+    if (colType === "COMPLETED" || task.column?.isComplete) return "Completed";
+    if (colType === "CANCELLED") return "Cancelled";
+    if (colType === "NEED_ATTENTION") return "NeedAttention";
+    if (colType === "IN_PROGRESS") return "InProgress";
+    if (colType === "TODO") return "ToDo";
+    if (colType === "BACKLOG") return "Backlog";
     if (task.blockerCategory) return "Blocked";
     if (task.riskLevel === "AT_RISK") return "AtRisk";
-    
-    const colName = task.column?.name;
-    if (colName === "Backlog") return "Backlog";
-    if (colName === "In Progress") return "InProgress";
-    if (colName === "In Review") return "InReview";
-    if (colName === "Done") return "Done";
     
     return "InProgress";
 }
 
 function mapSubtaskStatus(sub: any) {
-    if (sub.isCompleted) return "Done";
+    if (sub.isCompleted) return "Completed";
     if (sub.acceptanceStatus === "PENDING") return "PendingAcceptance";
     if (sub.acceptanceStatus === "REJECTED") return "ReworkRequired";
     return "InProgress";
@@ -640,7 +642,7 @@ export async function removeProjectMember(memberId: string, actingUserId?: strin
 // ----------------------------------------------------
 
 export async function createProjectTask(projectId: string, data: any, createdById: string) {
-    const {
+    let {
         title,
         description,
         columnId,
@@ -654,18 +656,61 @@ export async function createProjectTask(projectId: string, data: any, createdByI
         subtasks = [],
     } = data;
 
-    if (!title || !startDate || !dueDate || !columnId) {
-        throw new Error("title, columnId, startDate, and dueDate are required.");
+    if (!title || !title.trim()) {
+        throw new Error("Task title is required.");
     }
 
-    return await prisma.projectTask.create({
+    const project = await prisma.project.findUnique({
+        where: { id: projectId },
+        select: { id: true, title: true, teamId: true, startDate: true, endDate: true, columns: { orderBy: { order: "asc" } } },
+    });
+
+    if (!project) throw new Error("Project not found.");
+
+    if (!columnId) {
+        if (project.columns && project.columns.length > 0) {
+            columnId = project.columns[0].id;
+        } else {
+            throw new Error("Project has no columns defined.");
+        }
+    }
+
+    const sDate = startDate ? new Date(startDate) : new Date(project.startDate || Date.now());
+    const dDate = dueDate ? new Date(dueDate) : new Date(project.endDate || (Date.now() + 7 * 24 * 60 * 60 * 1000));
+
+    // Validate task start and due dates against project timeline bounds
+    if (project.startDate && project.endDate) {
+        const pStartStr = new Date(project.startDate).toISOString().split("T")[0];
+        const pEndStr = new Date(project.endDate).toISOString().split("T")[0];
+
+        const taskStartStr = new Date(sDate).toISOString().split("T")[0];
+        const taskDueStr = new Date(dDate).toISOString().split("T")[0];
+
+        if (taskStartStr < pStartStr) {
+            throw new Error(`Task start date (${taskStartStr}) cannot be earlier than project start date (${pStartStr}).`);
+        }
+        if (taskStartStr > pEndStr) {
+            throw new Error(`Task start date (${taskStartStr}) cannot be later than project end date (${pEndStr}).`);
+        }
+        if (taskDueStr < pStartStr) {
+            throw new Error(`Task due date (${taskDueStr}) cannot be earlier than project start date (${pStartStr}).`);
+        }
+        if (taskDueStr > pEndStr) {
+            throw new Error(`Task due date (${taskDueStr}) cannot be later than project end date (${pEndStr}).`);
+        }
+        if (taskStartStr > taskDueStr) {
+            throw new Error("Task start date cannot be later than task due date.");
+        }
+    }
+
+    const task = await prisma.projectTask.create({
         data: {
             projectId,
             columnId,
-            title,
-            description: description || "",
-            startDate: new Date(startDate),
-            dueDate: new Date(dueDate),
+            title: title.trim(),
+            description: description ? description.trim() : "",
+            startDate: sDate,
+            dueDate: dDate,
             estimatedDays: estimatedDays ? Number(estimatedDays) : 1.0,
             effortMode: effortMode || "SHARED",
             priority: priority || "MEDIUM",
@@ -683,8 +728,8 @@ export async function createProjectTask(projectId: string, data: any, createdByI
                     title: st.title,
                     description: st.description || "",
                     assignedToId: st.assignedToId,
-                    startDate: new Date(st.startDate || startDate),
-                    dueDate: new Date(st.dueDate || dueDate),
+                    startDate: new Date(st.startDate || sDate),
+                    dueDate: new Date(st.dueDate || dDate),
                     estimatedDays: st.estimatedDays ? Number(st.estimatedDays) : 1.0,
                     reviewerId: st.reviewerId || null,
                 })),
@@ -698,9 +743,60 @@ export async function createProjectTask(projectId: string, data: any, createdByI
             subtasks: { include: { assignedTo: true, reviewer: true } },
         },
     });
+
+    // Notify everyone assigned to this new task
+    if (Array.isArray(assigneeIds) && assigneeIds.length > 0) {
+        for (const uId of assigneeIds) {
+            if (uId !== createdById) {
+                await createNotification({
+                    userId: uId,
+                    content: `You were assigned to main task "${task.title}" in project "${project.title}".`,
+                    type: "TASK_ASSIGNED",
+                    teamId: project.teamId,
+                }).catch((err) => console.error("Failed to create task notification:", err));
+            }
+        }
+    }
+
+    return task;
 }
 
 export async function updateProjectTask(taskId: string, data: any) {
+    if (data.startDate !== undefined || data.dueDate !== undefined) {
+        const existingTask = await prisma.projectTask.findUnique({
+            where: { id: taskId },
+            include: { project: true },
+        });
+        if (!existingTask) throw new Error("Task not found.");
+
+        const newStart = data.startDate !== undefined ? new Date(data.startDate) : existingTask.startDate;
+        const newDue = data.dueDate !== undefined ? new Date(data.dueDate) : existingTask.dueDate;
+
+        if (existingTask.project.startDate && existingTask.project.endDate) {
+            const pStartStr = new Date(existingTask.project.startDate).toISOString().split("T")[0];
+            const pEndStr = new Date(existingTask.project.endDate).toISOString().split("T")[0];
+
+            const taskStartStr = new Date(newStart).toISOString().split("T")[0];
+            const taskDueStr = new Date(newDue).toISOString().split("T")[0];
+
+            if (taskStartStr < pStartStr) {
+                throw new Error(`Task start date (${taskStartStr}) cannot be earlier than project start date (${pStartStr}).`);
+            }
+            if (taskStartStr > pEndStr) {
+                throw new Error(`Task start date (${taskStartStr}) cannot be later than project end date (${pEndStr}).`);
+            }
+            if (taskDueStr < pStartStr) {
+                throw new Error(`Task due date (${taskDueStr}) cannot be earlier than project start date (${pStartStr}).`);
+            }
+            if (taskDueStr > pEndStr) {
+                throw new Error(`Task due date (${taskDueStr}) cannot be later than project end date (${pEndStr}).`);
+            }
+            if (taskStartStr > taskDueStr) {
+                throw new Error("Task start date cannot be later than task due date.");
+            }
+        }
+    }
+
     const updateData: any = {};
     if (data.title !== undefined) updateData.title = data.title;
     if (data.description !== undefined) updateData.description = data.description;
@@ -1281,4 +1377,113 @@ export async function cancelProjectInvitation(invitationId: string, actingUserId
         invitation: updatedInvitation,
     };
 }
+
+export async function createProjectColumn(projectId: string, name: string, type: string = "CUSTOM", isComplete?: boolean) {
+    const existing = await prisma.projectColumn.findFirst({
+        where: { projectId, name: { equals: name, mode: "insensitive" } },
+    });
+    if (existing) {
+        throw new Error(`A column named "${name}" already exists in this project.`);
+    }
+
+    const lastCol = await prisma.projectColumn.findFirst({
+        where: { projectId },
+        orderBy: { order: "desc" },
+    });
+    const order = lastCol ? lastCol.order + 1 : 0;
+
+    return await prisma.projectColumn.create({
+        data: {
+            projectId,
+            name: name.trim(),
+            type: "CUSTOM",
+            order,
+            isComplete: !!isComplete,
+        },
+    });
+}
+
+export async function updateProjectColumn(columnId: string, name?: string, type?: string, isComplete?: boolean) {
+    const col = await prisma.projectColumn.findUnique({ where: { id: columnId } });
+    if (!col) throw new Error("Column not found.");
+
+    if (col.type !== "CUSTOM") {
+        throw new Error("System columns (Backlog, To Do, In Progress, Need Attention, Completed, Cancelled) cannot be modified or renamed.");
+    }
+
+    const updateData: any = {};
+    if (name !== undefined && name.trim()) {
+        const existing = await prisma.projectColumn.findFirst({
+            where: {
+                projectId: col.projectId,
+                name: { equals: name.trim(), mode: "insensitive" },
+                id: { not: columnId },
+            },
+        });
+        if (existing) {
+            throw new Error(`A column named "${name.trim()}" already exists in this project.`);
+        }
+        updateData.name = name.trim();
+    }
+    if (isComplete !== undefined) {
+        updateData.isComplete = isComplete;
+    }
+
+    return await prisma.projectColumn.update({
+        where: { id: columnId },
+        data: updateData,
+    });
+}
+
+export async function deleteProjectColumn(columnId: string) {
+    const col = await prisma.projectColumn.findUnique({
+        where: { id: columnId },
+        include: { tasks: true },
+    });
+    if (!col) throw new Error("Column not found.");
+
+    if (col.type !== "CUSTOM") {
+        throw new Error("System columns (Backlog, To Do, In Progress, Need Attention, Completed, Cancelled) cannot be deleted.");
+    }
+
+    const totalColumns = await prisma.projectColumn.count({
+        where: { projectId: col.projectId },
+    });
+    if (totalColumns <= 1) {
+        throw new Error("Cannot delete the only remaining column in the project.");
+    }
+
+    // Find fallback column
+    const fallbackCol = await prisma.projectColumn.findFirst({
+        where: { projectId: col.projectId, id: { not: columnId } },
+        orderBy: { order: "asc" },
+    });
+
+    if (fallbackCol && col.tasks.length > 0) {
+        await prisma.projectTask.updateMany({
+            where: { columnId },
+            data: { columnId: fallbackCol.id },
+        });
+    }
+
+    await prisma.projectColumn.delete({ where: { id: columnId } });
+
+    return { message: "Column deleted successfully", fallbackColumnId: fallbackCol?.id };
+}
+
+export async function reorderProjectColumns(projectId: string, columnOrders: { id: string; order: number }[]) {
+    await prisma.$transaction(
+        columnOrders.map((item) =>
+            prisma.projectColumn.update({
+                where: { id: item.id },
+                data: { order: item.order },
+            })
+        )
+    );
+    return await prisma.projectColumn.findMany({
+        where: { projectId },
+        orderBy: { order: "asc" },
+    });
+}
+
 

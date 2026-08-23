@@ -394,3 +394,58 @@ export async function cancelInvitation(req: Request, res: Response) {
     }
 }
 
+// ----------------------------------------------------
+// PROJECT COLUMNS
+// ----------------------------------------------------
+
+export async function createColumn(req: Request, res: Response) {
+    try {
+        const { projectId } = req.params;
+        const { name, type, isComplete } = req.body;
+        if (!name) return sendResponse(res, 400, { error: "Column name is required." });
+
+        const column = await projectsService.createProjectColumn(projectId, name, type, isComplete);
+        sendResponse(res, 201, column);
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+export async function updateColumn(req: Request, res: Response) {
+    try {
+        const { columnId } = req.params;
+        const { name, type, isComplete } = req.body;
+
+        const column = await projectsService.updateProjectColumn(columnId, name, type, isComplete);
+        sendResponse(res, 200, column);
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+export async function deleteColumn(req: Request, res: Response) {
+    try {
+        const { columnId } = req.params;
+        const result = await projectsService.deleteProjectColumn(columnId);
+        sendResponse(res, 200, result);
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+export async function reorderColumns(req: Request, res: Response) {
+    try {
+        const { projectId } = req.params;
+        const { columnOrders } = req.body;
+        if (!Array.isArray(columnOrders)) {
+            return sendResponse(res, 400, { error: "columnOrders array is required." });
+        }
+
+        const columns = await projectsService.reorderProjectColumns(projectId, columnOrders);
+        sendResponse(res, 200, columns);
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+

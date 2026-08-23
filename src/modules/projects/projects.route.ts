@@ -48,4 +48,10 @@ router.delete("/projects/:projectId/dependencies/:dependencyId", resolveWorkspac
 router.post("/projects/:projectId/incidents/:incidentId/resolve", resolveWorkspaceContext, projectsController.resolveIncident);
 router.post("/projects/:projectId/incidents/:incidentId/reassign", resolveWorkspaceContext, projectsController.reassignIncident);
 
+// Project Columns (Custom Kanban Columns)
+router.post("/projects/:projectId/columns", resolveWorkspaceContext, projectsController.createColumn);
+router.put("/projects/:projectId/columns/reorder", resolveWorkspaceContext, projectsController.reorderColumns);
+router.put("/projects/:projectId/columns/:columnId", resolveWorkspaceContext, projectsController.updateColumn);
+router.delete("/projects/:projectId/columns/:columnId", resolveWorkspaceContext, projectsController.deleteColumn);
+
 export default router;
