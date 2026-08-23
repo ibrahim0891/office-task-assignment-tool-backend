@@ -560,9 +560,45 @@ export const createTaskComment = async (taskId: string, userId: string, content:
     if (!task) return comment;
 
     const mentionedUserIds = new Set<string>();
+    const lowerContent = content.toLowerCase();
+    const hasLeaderGroupMention = lowerContent.includes("@leaders") || lowerContent.includes("@leader");
+
+    // Fetch team members of this workspace
+    const teamMembers = await prisma.userTeam.findMany({
+        where: { teamId: task.teamId },
+        include: {
+            user: { select: { id: true, fullName: true } }
+        }
+    });
+
+    for (const tm of teamMembers) {
+        if (tm.userId === userId) continue;
+
+        // Mention notifications are strictly restricted to Leaders
+        if (tm.role !== "LEADER") {
+            continue;
+        }
+
+        const fullNameLower = tm.user.fullName.toLowerCase();
+        const firstNameLower = fullNameLower.split(" ")[0];
+
+        // 1. Group mention for Leaders
+        if (hasLeaderGroupMention) {
+            mentionedUserIds.add(tm.userId);
+        }
+        // 2. Individual leader mention by full name or first name
+        else if (
+            lowerContent.includes(`@${fullNameLower}`) ||
+            (firstNameLower.length >= 2 && lowerContent.includes(`@${firstNameLower}`))
+        ) {
+            mentionedUserIds.add(tm.userId);
+        }
+    }
+
+    // Fallback search for any other @word mentions
     if (mentions && mentions.length > 0) {
-        const uniqueNames = Array.from(new Set(mentions.map((m) => m.substring(1))));
-        const mentionedUsers = await prisma.user.findMany({
+        const uniqueNames = Array.from(new Set(mentions.map((m) => m.substring(1).toLowerCase())));
+        const extraUsers = await prisma.user.findMany({
             where: {
                 OR: uniqueNames.map((name) => ({
                     fullName: { contains: name, mode: "insensitive" },
@@ -571,8 +607,10 @@ export const createTaskComment = async (taskId: string, userId: string, content:
             select: { id: true },
         });
 
-        for (const u of mentionedUsers) {
-            if (u.id !== userId) {
+        const leaderUserIds = new Set(teamMembers.filter((tm) => tm.role === "LEADER").map((tm) => tm.userId));
+
+        for (const u of extraUsers) {
+            if (u.id !== userId && leaderUserIds.has(u.id)) {
                 mentionedUserIds.add(u.id);
             }
         }
