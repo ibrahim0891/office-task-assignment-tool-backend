@@ -121,6 +121,7 @@ model User {
   resolvedProjectIncidents ProjectIncident[]     @relation("ProjectIncidentResolver")
   projectReworkLogs        ProjectReworkLog[]
   projectTaskComments      ProjectTaskComment[]
+  resolvedProjectComments  ProjectTaskComment[] @relation("ProjectCommentResolvedBy")
   projectTaskActivities    ProjectTaskActivity[]
   sentProjectInvitations   ProjectInvitation[]   @relation("SentProjectInvitations")
   receivedProjectInvitations ProjectInvitation[] @relation("ReceivedProjectInvitations")
@@ -548,9 +549,11 @@ model ProjectSubtask {
   createdAt        DateTime             @default(now())
   updatedAt        DateTime             @updatedAt
 
-  parentTask ProjectTask @relation(fields: [parentTaskId], references: [id], onDelete: Cascade)
-  assignedTo User        @relation("ProjectSubtaskAssignee", fields: [assignedToId], references: [id], onDelete: Cascade)
-  reviewer   User?       @relation("ProjectSubtaskReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
+  parentTask ProjectTask          @relation(fields: [parentTaskId], references: [id], onDelete: Cascade)
+  assignedTo User                 @relation("ProjectSubtaskAssignee", fields: [assignedToId], references: [id], onDelete: Cascade)
+  reviewer   User?                @relation("ProjectSubtaskReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
+  comments   ProjectTaskComment[]
+  activities ProjectTaskActivity[]
 
   @@index([parentTaskId])
   @@index([assignedToId])
@@ -619,30 +622,43 @@ model ProjectReworkLog {
 }
 
 model ProjectTaskComment {
-  id        String   @id @default(uuid())
-  taskId    String
-  userId    String
-  content   String
-  createdAt DateTime @default(now())
+  id           String    @id @default(uuid())
+  taskId       String
+  subtaskId    String?
+  userId       String
+  content      String
+  isResolved   Boolean   @default(false)
+  resolvedById String?
+  resolvedAt   DateTime?
+  isEdited     Boolean   @default(false)
+  updatedAt    DateTime  @updatedAt @default(now())
+  createdAt    DateTime  @default(now())
 
-  task ProjectTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  user User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task       ProjectTask     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  subtask    ProjectSubtask? @relation(fields: [subtaskId], references: [id], onDelete: Cascade)
+  user       User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  resolvedBy User?           @relation("ProjectCommentResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
 
   @@index([taskId])
+  @@index([subtaskId])
   @@index([userId])
+  @@index([resolvedById])
 }
 
 model ProjectTaskActivity {
   id         String   @id @default(uuid())
   taskId     String
+  subtaskId  String?
   userId     String
   actionType String // CREATE, EDIT, STATUS_CHANGE, COMMENT, ASSIGN, REWORK
   details    String // JSON string
   createdAt  DateTime @default(now())
 
-  task ProjectTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  user User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task    ProjectTask     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  subtask ProjectSubtask? @relation(fields: [subtaskId], references: [id], onDelete: Cascade)
+  user    User            @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([taskId])
+  @@index([subtaskId])
   @@index([userId])
 }

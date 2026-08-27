@@ -337,3 +337,59 @@ export async function resolveWorkspaceContext(req: Request, res: Response, next:
         sendResponse(res, 500, { error: error.message });
     }
 }
+
+export async function requireProjectManagerOrLeader(req: Request, res: Response, next: NextFunction) {
+    const decoded = (req as any).user;
+    if (!decoded) return sendResponse(res, 401, { error: "Authentication required." });
+
+    let projectId = req.params.projectId || req.body?.projectId;
+    if (!projectId && req.params.taskId) {
+        const pTask = await prisma.projectTask.findUnique({
+            where: { id: req.params.taskId },
+            select: { projectId: true },
+        });
+        if (pTask) {
+            projectId = pTask.projectId;
+        }
+    }
+
+    if (!projectId) {
+        return sendResponse(res, 400, { error: "Project context is required." });
+    }
+
+    try {
+        const project = await prisma.project.findUnique({
+            where: { id: projectId },
+            include: { members: true },
+        });
+
+        if (!project) {
+            return sendResponse(res, 404, { error: "Project not found." });
+        }
+
+        const isManager = project.managerId === decoded.userId;
+
+        // Check project member role
+        const projectMember = project.members.find((m) => m.userId === decoded.userId);
+        const isProjectLeader = projectMember && (
+            projectMember.role === "LEADER" || 
+            projectMember.role === "MANAGER"
+        );
+
+        // Check workspace team role
+        const teamRole = await getCachedMembershipRole(decoded.userId, project.teamId);
+        const isWorkspaceLeader = teamRole === Role.LEADER;
+
+        if (!isManager && !isProjectLeader && !isWorkspaceLeader) {
+            return sendResponse(res, 403, {
+                error: "Access denied. Only project managers or leaders can perform this action.",
+            });
+        }
+
+        (req as any).userRole = isWorkspaceLeader ? Role.LEADER : (isProjectLeader ? Role.LEADER : Role.MEMBER);
+        (req as any).workspaceTeamId = project.teamId;
+        next();
+    } catch (error: any) {
+        sendResponse(res, 500, { error: error.message });
+    }
+}

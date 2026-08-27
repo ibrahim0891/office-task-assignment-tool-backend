@@ -57,6 +57,7 @@ function mapProjectData(project: any) {
         const mappedSubtasks = (task.subtasks || []).map((sub: any) => ({
             ...sub,
             status: mapSubtaskStatus(sub),
+            commentsCount: Array.isArray(sub.comments) ? sub.comments.length : 0,
         }));
         
         return {
@@ -210,7 +211,22 @@ export async function getProjectDetail(projectId: string) {
                     reviewer: true,
                     assignees: { include: { user: true } },
                     subtasks: {
-                        include: { assignedTo: true, reviewer: true },
+                        include: {
+                            assignedTo: true,
+                            reviewer: true,
+                            comments: {
+                                include: {
+                                    user: { select: { id: true, name: true, fullName: true, avatarUrl: true } },
+                                },
+                                orderBy: { createdAt: "asc" },
+                            },
+                            activities: {
+                                include: {
+                                    user: { select: { id: true, name: true, fullName: true, avatarUrl: true } },
+                                },
+                                orderBy: { createdAt: "desc" },
+                            },
+                        },
                         orderBy: { createdAt: "asc" },
                     },
                     reworkLogs: {
@@ -886,15 +902,52 @@ export async function reworkProjectTask(
 // SUBTASKS (1-to-1)
 // ----------------------------------------------------
 
-export async function createProjectSubtask(taskId: string, data: any) {
+export async function createProjectSubtask(taskId: string, data: any, actingUserId?: string) {
+    const parentTask = await prisma.projectTask.findUnique({
+        where: { id: taskId },
+        include: {
+            assignees: true,
+            project: { include: { members: true } },
+        },
+    });
+    if (!parentTask) throw new Error("Main task not found.");
+
+    let targetAssigneeId = data.assignedToId;
+
+    if (actingUserId) {
+        const isManager = parentTask.project.managerId === actingUserId;
+        const isProjectLeader = parentTask.project.members.some(
+            (m) => m.userId === actingUserId && (m.role === "LEADER" || m.role === "MANAGER")
+        );
+        const isTaskAssignee = parentTask.assignees.some((a) => a.userId === actingUserId);
+
+        if (!isManager && !isProjectLeader && !isTaskAssignee) {
+            throw new Error("Access denied. You must be assigned to this main task or be a project leader to create subtasks.");
+        }
+
+        // If regular member, force subtask to be assigned to themselves
+        if (!isManager && !isProjectLeader) {
+            targetAssigneeId = actingUserId;
+        } else if (!targetAssigneeId) {
+            targetAssigneeId = actingUserId;
+        }
+    }
+
+    if (!targetAssigneeId) {
+        throw new Error("Subtask assignee is required.");
+    }
+
+    const startDate = data.startDate ? new Date(data.startDate) : (parentTask.startDate || new Date());
+    const dueDate = data.dueDate ? new Date(data.dueDate) : (parentTask.dueDate || new Date());
+
     return await prisma.projectSubtask.create({
         data: {
             parentTaskId: taskId,
             title: data.title,
             description: data.description || "",
-            assignedToId: data.assignedToId,
-            startDate: new Date(data.startDate),
-            dueDate: new Date(data.dueDate),
+            assignedToId: targetAssigneeId,
+            startDate,
+            dueDate,
             estimatedDays: data.estimatedDays ? Number(data.estimatedDays) : 1.0,
             reviewerId: data.reviewerId || null,
         },
@@ -902,7 +955,39 @@ export async function createProjectSubtask(taskId: string, data: any) {
     });
 }
 
-export async function updateProjectSubtask(subtaskId: string, data: any) {
+export async function updateProjectSubtask(subtaskId: string, data: any, actingUserId?: string) {
+    const existingSubtask = await prisma.projectSubtask.findUnique({
+        where: { id: subtaskId },
+        include: {
+            parentTask: {
+                include: {
+                    assignees: true,
+                    project: { include: { members: true } },
+                },
+            },
+        },
+    });
+    if (!existingSubtask) throw new Error("Subtask not found.");
+
+    if (actingUserId) {
+        const isManager = existingSubtask.parentTask.project.managerId === actingUserId;
+        const isProjectLeader = existingSubtask.parentTask.project.members.some(
+            (m) => m.userId === actingUserId && (m.role === "LEADER" || m.role === "MANAGER")
+        );
+        const isSubtaskAssignee = existingSubtask.assignedToId === actingUserId;
+
+        if (!isManager && !isProjectLeader && !isSubtaskAssignee) {
+            throw new Error("Access denied. You can only update subtasks assigned to you.");
+        }
+
+        // Only Manager or Leader can reassign subtask to someone else
+        if (data.assignedToId !== undefined && data.assignedToId !== existingSubtask.assignedToId) {
+            if (!isManager && !isProjectLeader) {
+                throw new Error("Access denied. Only project managers or leaders can reassign subtasks.");
+            }
+        }
+    }
+
     const updateData: any = {};
     if (data.title !== undefined) updateData.title = data.title;
     if (data.description !== undefined) updateData.description = data.description;
@@ -920,7 +1005,31 @@ export async function updateProjectSubtask(subtaskId: string, data: any) {
     });
 }
 
-export async function deleteProjectSubtask(subtaskId: string) {
+export async function deleteProjectSubtask(subtaskId: string, actingUserId?: string) {
+    const existingSubtask = await prisma.projectSubtask.findUnique({
+        where: { id: subtaskId },
+        include: {
+            parentTask: {
+                include: {
+                    project: { include: { members: true } },
+                },
+            },
+        },
+    });
+    if (!existingSubtask) throw new Error("Subtask not found.");
+
+    if (actingUserId) {
+        const isManager = existingSubtask.parentTask.project.managerId === actingUserId;
+        const isProjectLeader = existingSubtask.parentTask.project.members.some(
+            (m) => m.userId === actingUserId && (m.role === "LEADER" || m.role === "MANAGER")
+        );
+        const isSubtaskAssignee = existingSubtask.assignedToId === actingUserId;
+
+        if (!isManager && !isProjectLeader && !isSubtaskAssignee) {
+            throw new Error("Access denied. You can only delete subtasks assigned to you.");
+        }
+    }
+
     return await prisma.projectSubtask.delete({
         where: { id: subtaskId },
     });
@@ -1487,3 +1596,266 @@ export async function reorderProjectColumns(projectId: string, columnOrders: { i
 }
 
 
+
+// ----------------------------------------------------
+// PROJECT TASK & SUBTASK COMMENTS
+// ----------------------------------------------------
+
+export async function getProjectTaskComments(taskId: string, subtaskId?: string) {
+    return await prisma.projectTaskComment.findMany({
+        where: subtaskId
+            ? { subtaskId }
+            : { taskId, subtaskId: null },
+        include: {
+            user: {
+                select: { id: true, name: true, fullName: true, avatarUrl: true },
+            },
+            resolvedBy: {
+                select: { id: true, name: true, fullName: true, avatarUrl: true },
+            },
+        },
+        orderBy: { createdAt: "asc" },
+    });
+}
+
+export async function createProjectTaskComment(
+    projectId: string,
+    taskId: string,
+    userId: string,
+    content: string,
+    subtaskId?: string
+) {
+    if (!content || !content.trim()) {
+        throw new Error("Comment content cannot be empty.");
+    }
+
+    const task = await prisma.projectTask.findUnique({
+        where: { id: taskId },
+        include: {
+            project: { include: { members: true } },
+            assignees: true,
+            subtasks: { where: subtaskId ? { id: subtaskId } : undefined, include: { assignedTo: true } },
+        },
+    });
+
+    if (!task) throw new Error("Task not found.");
+
+    const comment = await prisma.projectTaskComment.create({
+        data: {
+            taskId,
+            subtaskId: subtaskId || null,
+            userId,
+            content: content.trim(),
+        },
+        include: {
+            user: {
+                select: { id: true, name: true, fullName: true, avatarUrl: true },
+            },
+        },
+    });
+
+    const subtaskTarget = subtaskId ? task.subtasks.find((s) => s.id === subtaskId) : null;
+    const targetTitle = subtaskTarget ? `subtask "${subtaskTarget.title}"` : `task "${task.title}"`;
+
+    const activity = await prisma.projectTaskActivity.create({
+        data: {
+            taskId,
+            subtaskId: subtaskId || null,
+            userId,
+            actionType: "COMMENT",
+            details: JSON.stringify({
+                note: `Commented on ${targetTitle}: "${content.trim().slice(0, 80)}"`,
+            }),
+        },
+        include: {
+            user: {
+                select: { id: true, name: true, fullName: true, avatarUrl: true },
+            },
+        },
+    });
+
+    // Real-time broadcast to the team room
+    const teamId = task.project.teamId;
+    notifyTeam(teamId, "project_task_comment_created", {
+        projectId,
+        taskId,
+        subtaskId: subtaskId || null,
+        comment,
+        activity,
+    });
+
+    // In-app notification to subtask assignee if someone else commented
+    const commentingUser = (comment as any).user;
+    const authorName = commentingUser?.name || commentingUser?.fullName || "A team member";
+
+    if (subtaskTarget && subtaskTarget.assignedToId && subtaskTarget.assignedToId !== userId) {
+        await createNotification({
+            userId: subtaskTarget.assignedToId,
+            type: "COMMENT_MENTION",
+            content: `${authorName} commented on your subtask "${subtaskTarget.title}": "${content.trim().slice(0, 60)}"`,
+            taskId,
+            teamId,
+        }).catch((e) => console.error("Notification error:", e));
+    }
+
+    return { comment, activity };
+}
+
+export async function deleteProjectTaskComment(commentId: string, actingUserId: string) {
+    const comment = await prisma.projectTaskComment.findUnique({
+        where: { id: commentId },
+        include: {
+            task: {
+                include: {
+                    project: { include: { members: true } },
+                },
+            },
+        },
+    });
+
+    if (!comment) throw new Error("Comment not found.");
+
+    const isAuthor = comment.userId === actingUserId;
+    const isManager = comment.task.project.managerId === actingUserId;
+    const isProjectLeader = comment.task.project.members.some(
+        (m) => m.userId === actingUserId && (m.role === "LEADER" || m.role === "MANAGER")
+    );
+
+    if (!isAuthor && !isManager && !isProjectLeader) {
+        throw new Error("Access denied. You can only delete your own comments.");
+    }
+
+    await prisma.projectTaskComment.delete({ where: { id: commentId } });
+
+    // Real-time broadcast
+    notifyTeam(comment.task.project.teamId, "project_task_comment_deleted", {
+        projectId: comment.task.projectId,
+        taskId: comment.taskId,
+        subtaskId: comment.subtaskId,
+        commentId,
+    });
+
+    return { success: true, message: "Comment deleted successfully." };
+}
+
+export async function updateProjectTaskComment(
+    commentId: string,
+    actingUserId: string,
+    content: string
+) {
+    if (!content || !content.trim()) {
+        throw new Error("Comment content cannot be empty.");
+    }
+
+    const comment = await prisma.projectTaskComment.findUnique({
+        where: { id: commentId },
+        include: {
+            task: { include: { project: { include: { members: true } } } },
+        },
+    });
+
+    if (!comment) throw new Error("Comment not found.");
+
+    if (comment.userId !== actingUserId) {
+        throw new Error("Access denied. Only the author can edit this comment.");
+    }
+
+    const updated = await prisma.projectTaskComment.update({
+        where: { id: commentId },
+        data: {
+            content: content.trim(),
+            isEdited: true,
+        },
+        include: {
+            user: { select: { id: true, name: true, fullName: true, avatarUrl: true } },
+            resolvedBy: { select: { id: true, name: true, fullName: true, avatarUrl: true } },
+        },
+    });
+
+    notifyTeam(comment.task.project.teamId, "project_task_comment_updated", {
+        projectId: comment.task.projectId,
+        taskId: comment.taskId,
+        subtaskId: comment.subtaskId,
+        comment: updated,
+    });
+
+    return updated;
+}
+
+export async function toggleResolveProjectTaskComment(
+    commentId: string,
+    actingUserId: string,
+    explicitResolve?: boolean
+) {
+    const comment = await prisma.projectTaskComment.findUnique({
+        where: { id: commentId },
+        include: {
+            task: {
+                include: {
+                    project: { include: { members: true } },
+                    assignees: true,
+                    subtasks: true,
+                },
+            },
+        },
+    });
+
+    if (!comment) throw new Error("Comment not found.");
+
+    const project = comment.task.project;
+    const isAuthor = comment.userId === actingUserId;
+    const isManager = project.managerId === actingUserId;
+    const isProjectLeader = project.members.some(
+        (m) => m.userId === actingUserId && (m.role === "LEADER" || m.role === "MANAGER")
+    );
+    const isMainTaskAssignee = comment.task.assignees.some((a) => a.userId === actingUserId);
+    const isSubtaskAssignee = comment.subtaskId
+        ? comment.task.subtasks.some((st) => st.id === comment.subtaskId && st.assignedToId === actingUserId)
+        : false;
+
+    if (!isAuthor && !isManager && !isProjectLeader && !isMainTaskAssignee && !isSubtaskAssignee) {
+        throw new Error("Access denied. Only the author, assignees, or project leaders can resolve comments.");
+    }
+
+    const nextResolveState = explicitResolve !== undefined ? explicitResolve : !comment.isResolved;
+
+    const updated = await prisma.projectTaskComment.update({
+        where: { id: commentId },
+        data: {
+            isResolved: nextResolveState,
+            resolvedById: nextResolveState ? actingUserId : null,
+            resolvedAt: nextResolveState ? new Date() : null,
+        },
+        include: {
+            user: { select: { id: true, name: true, fullName: true, avatarUrl: true } },
+            resolvedBy: { select: { id: true, name: true, fullName: true, avatarUrl: true } },
+        },
+    });
+
+    const actionType = nextResolveState ? "COMMENT_RESOLVED" : "COMMENT_REOPENED";
+    const activity = await prisma.projectTaskActivity.create({
+        data: {
+            taskId: comment.taskId,
+            subtaskId: comment.subtaskId || null,
+            userId: actingUserId,
+            actionType,
+            details: JSON.stringify({
+                note: nextResolveState ? "Resolved comment thread" : "Reopened comment thread",
+                commentId,
+            }),
+        },
+        include: {
+            user: { select: { id: true, name: true, fullName: true, avatarUrl: true } },
+        },
+    });
+
+    notifyTeam(project.teamId, "project_task_comment_resolved", {
+        projectId: comment.task.projectId,
+        taskId: comment.taskId,
+        subtaskId: comment.subtaskId,
+        comment: updated,
+        activity,
+    });
+
+    return { comment: updated, activity };
+}

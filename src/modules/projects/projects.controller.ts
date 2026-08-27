@@ -217,9 +217,13 @@ export async function reworkTask(req: Request, res: Response) {
 export async function createSubtask(req: Request, res: Response) {
     try {
         const { taskId } = req.params;
-        const subtask = await projectsService.createProjectSubtask(taskId, req.body);
+        const actingUserId = (req as any).user?.userId || (req.headers["x-user-id"] as string);
+        const subtask = await projectsService.createProjectSubtask(taskId, req.body, actingUserId);
         sendResponse(res, 201, subtask);
     } catch (error: any) {
+        if (error.message?.includes("Access denied")) {
+            return sendResponse(res, 403, { error: error.message });
+        }
         sendResponse(res, 400, { error: error.message });
     }
 }
@@ -227,9 +231,13 @@ export async function createSubtask(req: Request, res: Response) {
 export async function updateSubtask(req: Request, res: Response) {
     try {
         const { subtaskId } = req.params;
-        const subtask = await projectsService.updateProjectSubtask(subtaskId, req.body);
+        const actingUserId = (req as any).user?.userId || (req.headers["x-user-id"] as string);
+        const subtask = await projectsService.updateProjectSubtask(subtaskId, req.body, actingUserId);
         sendResponse(res, 200, subtask);
     } catch (error: any) {
+        if (error.message?.includes("Access denied")) {
+            return sendResponse(res, 403, { error: error.message });
+        }
         sendResponse(res, 400, { error: error.message });
     }
 }
@@ -237,9 +245,13 @@ export async function updateSubtask(req: Request, res: Response) {
 export async function deleteSubtask(req: Request, res: Response) {
     try {
         const { subtaskId } = req.params;
-        await projectsService.deleteProjectSubtask(subtaskId);
+        const actingUserId = (req as any).user?.userId || (req.headers["x-user-id"] as string);
+        await projectsService.deleteProjectSubtask(subtaskId, actingUserId);
         sendResponse(res, 200, { message: "Subtask deleted." });
     } catch (error: any) {
+        if (error.message?.includes("Access denied")) {
+            return sendResponse(res, 403, { error: error.message });
+        }
         sendResponse(res, 400, { error: error.message });
     }
 }
@@ -449,3 +461,95 @@ export async function reorderColumns(req: Request, res: Response) {
 }
 
 
+
+// ----------------------------------------------------
+// PROJECT TASK & SUBTASK COMMENTS CONTROLLER
+// ----------------------------------------------------
+
+export async function getComments(req: Request, res: Response) {
+    try {
+        const { taskId } = req.params;
+        const { subtaskId } = req.query;
+        const comments = await projectsService.getProjectTaskComments(taskId, subtaskId as string | undefined);
+        sendResponse(res, 200, comments);
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+export async function createComment(req: Request, res: Response) {
+    try {
+        const { projectId, taskId } = req.params;
+        const { content, subtaskId } = req.body;
+        const userId = (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
+
+        if (!userId) {
+            return sendResponse(res, 401, { error: "User authentication required." });
+        }
+
+        const result = await projectsService.createProjectTaskComment(
+            projectId,
+            taskId,
+            userId,
+            content,
+            subtaskId
+        );
+        sendResponse(res, 201, result);
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+export async function deleteComment(req: Request, res: Response) {
+    try {
+        const { commentId } = req.params;
+        const userId = (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
+
+        if (!userId) {
+            return sendResponse(res, 401, { error: "User authentication required." });
+        }
+
+        const result = await projectsService.deleteProjectTaskComment(commentId, userId);
+        sendResponse(res, 200, result);
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+export async function updateComment(req: Request, res: Response) {
+    try {
+        const { commentId } = req.params;
+        const { content } = req.body;
+        const userId = (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
+
+        if (!userId) {
+            return sendResponse(res, 401, { error: "User authentication required." });
+        }
+
+        const result = await projectsService.updateProjectTaskComment(commentId, userId, content);
+        sendResponse(res, 200, result);
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+export async function toggleResolveComment(req: Request, res: Response) {
+    try {
+        const { commentId } = req.params;
+        const { isResolved } = req.body;
+        const userId = (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
+
+        if (!userId) {
+            return sendResponse(res, 401, { error: "User authentication required." });
+        }
+
+        const result = await projectsService.toggleResolveProjectTaskComment(
+            commentId,
+            userId,
+            isResolved !== undefined ? Boolean(isResolved) : undefined
+        );
+        sendResponse(res, 200, result);
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
