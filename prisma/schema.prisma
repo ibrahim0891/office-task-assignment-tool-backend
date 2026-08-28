@@ -463,8 +463,9 @@ model ProjectColumn {
   createdAt  DateTime          @default(now())
   updatedAt  DateTime          @updatedAt
 
-  project Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  tasks   ProjectTask[]
+  project  Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  tasks    ProjectTask[]
+  subtasks ProjectSubtask[]
 
   @@unique([projectId, name])
   @@index([projectId, order])
@@ -536,8 +537,10 @@ model ProjectTaskAssignee {
 model ProjectSubtask {
   id               String               @id @default(uuid())
   parentTaskId     String
+  columnId         String?
   title            String
   description      String?
+  priority         String               @default("MEDIUM")
   assignedToId     String
   startDate        DateTime
   dueDate          DateTime
@@ -550,12 +553,14 @@ model ProjectSubtask {
   updatedAt        DateTime             @updatedAt
 
   parentTask ProjectTask          @relation(fields: [parentTaskId], references: [id], onDelete: Cascade)
+  column     ProjectColumn?       @relation(fields: [columnId], references: [id], onDelete: SetNull)
   assignedTo User                 @relation("ProjectSubtaskAssignee", fields: [assignedToId], references: [id], onDelete: Cascade)
   reviewer   User?                @relation("ProjectSubtaskReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
   comments   ProjectTaskComment[]
   activities ProjectTaskActivity[]
 
   @@index([parentTaskId])
+  @@index([columnId])
   @@index([assignedToId])
   @@index([isCompleted])
   @@index([parentTaskId, isCompleted])

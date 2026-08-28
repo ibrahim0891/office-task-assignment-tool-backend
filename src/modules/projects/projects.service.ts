@@ -29,24 +29,24 @@ function mapProjectStatus(status: string) {
 }
 
 function mapTaskStatus(task: any) {
-    const colType = task.column?.type;
-    if (colType === "COMPLETED" || task.column?.isComplete) return "Completed";
-    if (colType === "CANCELLED") return "Cancelled";
-    if (colType === "NEED_ATTENTION") return "NeedAttention";
-    if (colType === "IN_PROGRESS") return "InProgress";
-    if (colType === "TODO") return "ToDo";
-    if (colType === "BACKLOG") return "Backlog";
+    if (task.column?.isComplete) return "Completed";
+    const colName = (task.column?.name || "").toLowerCase().trim();
+    if (colName === "completed" || colName === "done") return "Completed";
+    if (colName === "cancelled" || colName === "canceled") return "Cancelled";
+    if (colName.includes("attention") || colName === "blocked") return "NeedAttention";
+    if (colName.includes("progress") || colName === "doing") return "InProgress";
+    if (colName.includes("todo") || colName.includes("to do") || colName.includes("backlog")) return "ToDo";
     if (task.blockerCategory) return "Blocked";
     if (task.riskLevel === "AT_RISK") return "AtRisk";
     
-    return "InProgress";
+    return task.column?.name || "InProgress";
 }
 
 function mapSubtaskStatus(sub: any) {
-    if (sub.isCompleted) return "Completed";
+    if (sub.isCompleted || sub.column?.isComplete) return "Completed";
     if (sub.acceptanceStatus === "PENDING") return "PendingAcceptance";
     if (sub.acceptanceStatus === "REJECTED") return "ReworkRequired";
-    return "InProgress";
+    return sub.column?.name || "InProgress";
 }
 
 function mapProjectData(project: any) {
@@ -57,6 +57,7 @@ function mapProjectData(project: any) {
         const mappedSubtasks = (task.subtasks || []).map((sub: any) => ({
             ...sub,
             status: mapSubtaskStatus(sub),
+            columnId: sub.columnId || (sub.isCompleted ? task.columnId : sub.columnId),
             commentsCount: Array.isArray(sub.comments) ? sub.comments.length : 0,
         }));
         
@@ -238,6 +239,7 @@ export async function getProjectDetail(projectId: string) {
                     assignees: { include: { user: true } },
                     subtasks: {
                         include: {
+                            column: true,
                             assignedTo: true,
                             reviewer: true,
                             comments: {
@@ -967,18 +969,39 @@ export async function createProjectSubtask(taskId: string, data: any, actingUser
     const startDate = data.startDate ? new Date(data.startDate) : (parentTask.startDate || new Date());
     const dueDate = data.dueDate ? new Date(data.dueDate) : (parentTask.dueDate || new Date());
 
+    let targetColumnId = data.columnId;
+    if (!targetColumnId) {
+        const firstCol = await prisma.projectColumn.findFirst({
+            where: { projectId: parentTask.projectId },
+            orderBy: { order: "asc" },
+        });
+        targetColumnId = parentTask.columnId || firstCol?.id;
+    }
+
+    let isCompleted = data.isCompleted !== undefined ? Boolean(data.isCompleted) : false;
+    if (targetColumnId) {
+        const col = await prisma.projectColumn.findUnique({ where: { id: targetColumnId } });
+        if (col?.isComplete) {
+            isCompleted = true;
+        }
+    }
+
     return await prisma.projectSubtask.create({
         data: {
             parentTaskId: taskId,
+            columnId: targetColumnId,
             title: data.title,
             description: data.description || "",
+            priority: data.priority || "MEDIUM",
             assignedToId: targetAssigneeId,
             startDate,
             dueDate,
             estimatedDays: data.estimatedDays ? Number(data.estimatedDays) : 1.0,
+            actualDays: data.actualDays ? Number(data.actualDays) : 0,
+            isCompleted,
             reviewerId: data.reviewerId || null,
         },
-        include: { assignedTo: true, reviewer: true },
+        include: { assignedTo: true, reviewer: true, column: true },
     });
 }
 
@@ -1019,6 +1042,16 @@ export async function updateProjectSubtask(subtaskId: string, data: any, actingU
     if (data.title !== undefined) updateData.title = data.title;
     if (data.description !== undefined) updateData.description = data.description;
     if (data.assignedToId !== undefined) updateData.assignedToId = data.assignedToId;
+    if (data.priority !== undefined) updateData.priority = data.priority;
+    if (data.columnId !== undefined) {
+        updateData.columnId = data.columnId;
+        const targetCol = await prisma.projectColumn.findUnique({ where: { id: data.columnId } });
+        if (targetCol?.isComplete) {
+            updateData.isCompleted = true;
+        } else if (data.isCompleted === undefined && existingSubtask.isCompleted && targetCol && !targetCol.isComplete) {
+            updateData.isCompleted = false;
+        }
+    }
     if (data.isCompleted !== undefined) updateData.isCompleted = Boolean(data.isCompleted);
     if (data.startDate !== undefined) updateData.startDate = new Date(data.startDate);
     if (data.dueDate !== undefined) updateData.dueDate = new Date(data.dueDate);
@@ -1028,7 +1061,7 @@ export async function updateProjectSubtask(subtaskId: string, data: any, actingU
     return await prisma.projectSubtask.update({
         where: { id: subtaskId },
         data: updateData,
-        include: { assignedTo: true, reviewer: true },
+        include: { assignedTo: true, reviewer: true, column: true },
     });
 }
 
@@ -1538,10 +1571,6 @@ export async function updateProjectColumn(columnId: string, name?: string, type?
     const col = await prisma.projectColumn.findUnique({ where: { id: columnId } });
     if (!col) throw new Error("Column not found.");
 
-    if (col.type !== "CUSTOM") {
-        throw new Error("System columns (Backlog, To Do, In Progress, Need Attention, Completed, Cancelled) cannot be modified or renamed.");
-    }
-
     const updateData: any = {};
     if (name !== undefined && name.trim()) {
         const existing = await prisma.projectColumn.findFirst({
@@ -1559,6 +1588,9 @@ export async function updateProjectColumn(columnId: string, name?: string, type?
     if (isComplete !== undefined) {
         updateData.isComplete = isComplete;
     }
+    if (type !== undefined) {
+        updateData.type = type;
+    }
 
     return await prisma.projectColumn.update({
         where: { id: columnId },
@@ -1573,10 +1605,6 @@ export async function deleteProjectColumn(columnId: string) {
     });
     if (!col) throw new Error("Column not found.");
 
-    if (col.type !== "CUSTOM") {
-        throw new Error("System columns (Backlog, To Do, In Progress, Need Attention, Completed, Cancelled) cannot be deleted.");
-    }
-
     const totalColumns = await prisma.projectColumn.count({
         where: { projectId: col.projectId },
     });
@@ -1590,8 +1618,14 @@ export async function deleteProjectColumn(columnId: string) {
         orderBy: { order: "asc" },
     });
 
-    if (fallbackCol && col.tasks.length > 0) {
-        await prisma.projectTask.updateMany({
+    if (fallbackCol) {
+        if (col.tasks.length > 0) {
+            await prisma.projectTask.updateMany({
+                where: { columnId },
+                data: { columnId: fallbackCol.id },
+            });
+        }
+        await prisma.projectSubtask.updateMany({
             where: { columnId },
             data: { columnId: fallbackCol.id },
         });
@@ -1599,7 +1633,7 @@ export async function deleteProjectColumn(columnId: string) {
 
     await prisma.projectColumn.delete({ where: { id: columnId } });
 
-    return { message: "Column deleted successfully", fallbackColumnId: fallbackCol?.id };
+    return { message: "Column deleted successfully", fallbackColumnId: fallbackCol?.id, fallbackColumnName: fallbackCol?.name };
 }
 
 export async function reorderProjectColumns(projectId: string, columnOrders: { id: string; order: number }[]) {
