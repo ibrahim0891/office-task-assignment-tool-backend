@@ -57,7 +57,7 @@ export const updateProfile = async (req: Request, res: Response) => {
 
 export const getTeams = async (req: Request, res: Response) => {
     const userId =
-        (req.query.userId as string) || (req.headers["x-user-id"] as string);
+        (req.query.userId as string) || (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
     try {
         const teams = await usersService.getUserTeams(userId);
         sendResponse(res, 200, teams);

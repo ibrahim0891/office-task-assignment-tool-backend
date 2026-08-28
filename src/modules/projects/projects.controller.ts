@@ -7,10 +7,7 @@ import { notifyTeam } from "../../config/socket";
 export async function getProjects(req: Request, res: Response) {
     try {
         const teamId = (req.query.teamId as string) || (req.headers["x-team-id"] as string);
-        if (!teamId) {
-            return sendResponse(res, 400, { error: "teamId is required." });
-        }
-        const userId = (req.query.userId as string) || (req.headers["x-user-id"] as string) || (req as any).user?.id;
+        const userId = (req.query.userId as string) || (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
         const isWorkspaceLeader = (req as any).userRole === "LEADER" || (req as any).user?.role === "LEADER";
 
         const projects = await projectsService.getProjectsList(teamId, userId, isWorkspaceLeader);
@@ -23,10 +20,7 @@ export async function getProjects(req: Request, res: Response) {
 export async function getPortfolioSummary(req: Request, res: Response) {
     try {
         const teamId = (req.query.teamId as string) || (req.headers["x-team-id"] as string);
-        if (!teamId) {
-            return sendResponse(res, 400, { error: "teamId is required." });
-        }
-        const userId = (req.query.userId as string) || (req.headers["x-user-id"] as string) || (req as any).user?.id;
+        const userId = (req.query.userId as string) || (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
         const isWorkspaceLeader = (req as any).userRole === "LEADER" || (req as any).user?.role === "LEADER";
 
         const summary = await projectsService.getPortfolioSummary(teamId, userId, isWorkspaceLeader);

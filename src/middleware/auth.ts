@@ -393,3 +393,82 @@ export async function requireProjectManagerOrLeader(req: Request, res: Response,
         sendResponse(res, 500, { error: error.message });
     }
 }
+
+export async function resolveProjectAccess(req: Request, res: Response, next: NextFunction) {
+    const decoded = (req as any).user;
+    if (!decoded) return sendResponse(res, 401, { error: "Authentication required." });
+
+    let projectId = req.params.projectId || req.body?.projectId || (req.query?.projectId as string);
+    if (!projectId && req.params.taskId) {
+        const pTask = await prisma.projectTask.findUnique({
+            where: { id: req.params.taskId },
+            select: { projectId: true },
+        });
+        if (pTask) {
+            projectId = pTask.projectId;
+        }
+    }
+
+    if (!projectId) {
+        return sendResponse(res, 400, { error: "Project context is required." });
+    }
+
+    try {
+        const project = await prisma.project.findUnique({
+            where: { id: projectId },
+            include: { members: true },
+        });
+
+        if (!project) {
+            return sendResponse(res, 404, { error: "Project not found." });
+        }
+
+        const isManager = project.managerId === decoded.userId;
+        const isMember = project.members.some((m) => m.userId === decoded.userId);
+        const teamRole = await getCachedMembershipRole(decoded.userId, project.teamId);
+
+        if (!isManager && !isMember && !teamRole) {
+            return sendResponse(res, 403, {
+                error: "Access denied. You are not a member of this project or its workspace.",
+            });
+        }
+
+        (req as any).userRole = teamRole || (isManager ? Role.LEADER : Role.MEMBER);
+        (req as any).workspaceTeamId = project.teamId;
+        next();
+    } catch (error: any) {
+        sendResponse(res, 500, { error: error.message });
+    }
+}
+
+export async function requireLeaderOrSelf(req: Request, res: Response, next: NextFunction) {
+    const decoded = (req as any).user;
+    if (!decoded) return sendResponse(res, 401, { error: "Authentication required." });
+
+    const teamId = await extractTeamId(req);
+    const targetUserId = req.body?.userId || req.query?.userId;
+
+    // If removing self (leaving workspace), allow
+    if (targetUserId && (targetUserId === decoded.userId || targetUserId === decoded.id)) {
+        (req as any).workspaceTeamId = teamId;
+        return next();
+    }
+
+    if (!teamId) {
+        return sendResponse(res, 400, { error: "Workspace team context is required." });
+    }
+
+    try {
+        const role = await getCachedMembershipRole(decoded.userId, teamId);
+
+        if (!role || role !== Role.LEADER) {
+            return sendResponse(res, 403, { error: "Access denied. Only workspace leaders can remove other members." });
+        }
+
+        (req as any).userRole = role;
+        (req as any).workspaceTeamId = teamId;
+        next();
+    } catch (error: any) {
+        sendResponse(res, 500, { error: error.message });
+    }
+}

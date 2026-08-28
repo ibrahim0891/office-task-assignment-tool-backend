@@ -1,3 +1,4 @@
+import { invalidateRoleCache } from "../../middleware/auth";
 import { prisma, Role } from "../../config/prisma";
 import { processAvatarUpload, deleteFromCloudinary } from "../../cloudinary";
 import { createNotification } from "../notifications/notifications.service";
@@ -225,6 +226,7 @@ export const removeMember = async (
         });
     }
 
+    invalidateRoleCache(userId, teamId);
     return memberTasks.length;
 };
 

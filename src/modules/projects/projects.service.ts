@@ -79,21 +79,33 @@ function mapProjectData(project: any) {
 /**
  * Lists all projects for a team with aggregated metrics (filtered by user membership for non-leaders)
  */
-export async function getProjectsList(teamId: string, userId?: string, isWorkspaceLeader?: boolean) {
-    if (!teamId) throw new Error("teamId is required.");
+export async function getProjectsList(teamId?: string, userId?: string, isWorkspaceLeader?: boolean) {
+    let whereClause: any = {};
 
-    const whereClause: any = { teamId };
+    if (userId) {
+        const ledTeams = await prisma.userTeam.findMany({
+            where: { userId, role: "LEADER" },
+            select: { teamId: true },
+        });
+        const ledTeamIds = ledTeams.map((t) => t.teamId);
 
-    if (userId && !isWorkspaceLeader) {
-        whereClause.OR = [
-            { managerId: userId },
-            { members: { some: { userId } } },
-        ];
+        whereClause = {
+            OR: [
+                { managerId: userId },
+                { members: { some: { userId } } },
+                ...(ledTeamIds.length > 0 ? [{ teamId: { in: ledTeamIds } }] : []),
+            ],
+        };
+    } else if (teamId) {
+        whereClause = { teamId };
     }
 
     const projects = await prisma.project.findMany({
         where: whereClause,
         include: {
+            team: {
+                select: { id: true, name: true, emoji: true },
+            },
             manager: true,
             folder: true,
             members: {
@@ -136,14 +148,25 @@ export async function getProjectsList(teamId: string, userId?: string, isWorkspa
 /**
  * Gets portfolio-wide metrics across all projects for a team
  */
-export async function getPortfolioSummary(teamId: string, userId?: string, isWorkspaceLeader?: boolean) {
-    const whereClause: any = { teamId };
+export async function getPortfolioSummary(teamId?: string, userId?: string, isWorkspaceLeader?: boolean) {
+    let whereClause: any = {};
 
-    if (userId && !isWorkspaceLeader) {
-        whereClause.OR = [
-            { managerId: userId },
-            { members: { some: { userId } } },
-        ];
+    if (userId) {
+        const ledTeams = await prisma.userTeam.findMany({
+            where: { userId, role: "LEADER" },
+            select: { teamId: true },
+        });
+        const ledTeamIds = ledTeams.map((t) => t.teamId);
+
+        whereClause = {
+            OR: [
+                { managerId: userId },
+                { members: { some: { userId } } },
+                ...(ledTeamIds.length > 0 ? [{ teamId: { in: ledTeamIds } }] : []),
+            ],
+        };
+    } else if (teamId) {
+        whereClause = { teamId };
     }
 
     const projects = await prisma.project.findMany({
@@ -196,6 +219,9 @@ export async function getProjectDetail(projectId: string) {
     const project = await prisma.project.findUnique({
         where: { id: projectId },
         include: {
+            team: {
+                select: { id: true, name: true, emoji: true },
+            },
             manager: true,
             members: {
                 include: { user: true },
@@ -919,10 +945,11 @@ export async function createProjectSubtask(taskId: string, data: any, actingUser
         const isProjectLeader = parentTask.project.members.some(
             (m) => m.userId === actingUserId && (m.role === "LEADER" || m.role === "MANAGER")
         );
+        const isProjectMember = parentTask.project.members.some((m) => m.userId === actingUserId);
         const isTaskAssignee = parentTask.assignees.some((a) => a.userId === actingUserId);
 
-        if (!isManager && !isProjectLeader && !isTaskAssignee) {
-            throw new Error("Access denied. You must be assigned to this main task or be a project leader to create subtasks.");
+        if (!isManager && !isProjectLeader && !isTaskAssignee && !isProjectMember) {
+            throw new Error("Access denied. You must be a project member to create subtasks.");
         }
 
         // If regular member, force subtask to be assigned to themselves
@@ -1235,10 +1262,6 @@ export async function getReceivedProjectInvitations(userId: string, teamId?: str
         status: "PENDING",
     };
 
-    if (teamId) {
-        where.project = { teamId };
-    }
-
     return await prisma.projectInvitation.findMany({
         where,
         include: {
@@ -1251,6 +1274,7 @@ export async function getReceivedProjectInvitations(userId: string, teamId?: str
                     startDate: true,
                     endDate: true,
                     teamId: true,
+                    team: { select: { id: true, name: true, emoji: true } },
                     manager: { select: { id: true, name: true, avatarUrl: true } },
                     folder: { select: { id: true, name: true, emoji: true } },
                 },
@@ -1289,6 +1313,7 @@ export async function getSentProjectInvitations(userId: string, teamId?: string,
                     title: true,
                     emoji: true,
                     teamId: true,
+                    team: { select: { id: true, name: true, emoji: true } },
                     manager: { select: { id: true, name: true, avatarUrl: true } },
                 },
             },
@@ -1308,9 +1333,6 @@ export async function getPendingInvitationsCount(userId: string, teamId?: string
         receiverId: userId,
         status: "PENDING",
     };
-    if (teamId) {
-        where.project = { teamId };
-    }
     const count = await prisma.projectInvitation.count({ where });
     return { count };
 }

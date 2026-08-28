@@ -1,28 +1,28 @@
 import { Router } from "express";
 import * as projectsController from "./projects.controller";
-import { resolveWorkspaceContext, requireLeader, requireProjectManagerOrLeader } from "../../middleware/auth";
+import { resolveWorkspaceContext, requireLeader, requireProjectManagerOrLeader, resolveProjectAccess } from "../../middleware/auth";
 
 const router = Router();
 
-// Project Portfolio & Summary
+// Project Portfolio & Summary (Global / user-scoped across teams)
 router.get("/projects", resolveWorkspaceContext, projectsController.getProjects);
 router.get("/projects/summary", resolveWorkspaceContext, projectsController.getPortfolioSummary);
 
-// Project Invitations (MUST be before :projectId)
-router.get("/projects/invitations/received", resolveWorkspaceContext, projectsController.getReceivedInvitations);
-router.get("/projects/invitations/sent", resolveWorkspaceContext, projectsController.getSentInvitations);
-router.get("/projects/invitations/count", resolveWorkspaceContext, projectsController.getPendingInvitationsCount);
-router.post("/projects/invitations/:invitationId/accept", resolveWorkspaceContext, projectsController.acceptInvitation);
-router.post("/projects/invitations/:invitationId/reject", resolveWorkspaceContext, projectsController.rejectInvitation);
-router.post("/projects/invitations/:invitationId/cancel", resolveWorkspaceContext, projectsController.cancelInvitation);
+// Project Invitations (Cross-workspace operations, user-authenticated)
+router.get("/projects/invitations/received", projectsController.getReceivedInvitations);
+router.get("/projects/invitations/sent", projectsController.getSentInvitations);
+router.get("/projects/invitations/count", projectsController.getPendingInvitationsCount);
+router.post("/projects/invitations/:invitationId/accept", projectsController.acceptInvitation);
+router.post("/projects/invitations/:invitationId/reject", projectsController.rejectInvitation);
+router.post("/projects/invitations/:invitationId/cancel", projectsController.cancelInvitation);
 router.post("/projects/:projectId/invitations", requireProjectManagerOrLeader, projectsController.sendInvitation);
 
 // Single Project CRUD & Analytics
-router.get("/projects/:projectId", resolveWorkspaceContext, projectsController.getProject);
+router.get("/projects/:projectId", resolveProjectAccess, projectsController.getProject);
 router.post("/projects", requireLeader, projectsController.createProject);
 router.put("/projects/:projectId", requireProjectManagerOrLeader, projectsController.updateProject);
 router.delete("/projects/:projectId", requireProjectManagerOrLeader, projectsController.deleteProject);
-router.get("/projects/:projectId/analytics", resolveWorkspaceContext, projectsController.getProjectAnalytics);
+router.get("/projects/:projectId/analytics", resolveProjectAccess, projectsController.getProjectAnalytics);
 
 // Project Members
 router.post("/projects/:projectId/members", requireProjectManagerOrLeader, projectsController.addMember);
@@ -36,17 +36,17 @@ router.delete("/projects/:projectId/tasks/:taskId", requireProjectManagerOrLeade
 router.post("/projects/:projectId/tasks/:taskId/rework", requireProjectManagerOrLeader, projectsController.reworkTask);
 
 // Subtasks
-router.post("/projects/:projectId/tasks/:taskId/subtasks", resolveWorkspaceContext, projectsController.createSubtask);
-router.put("/projects/:projectId/tasks/:taskId/subtasks/:subtaskId", resolveWorkspaceContext, projectsController.updateSubtask);
-router.delete("/projects/:projectId/tasks/:taskId/subtasks/:subtaskId", resolveWorkspaceContext, projectsController.deleteSubtask);
+router.post("/projects/:projectId/tasks/:taskId/subtasks", resolveProjectAccess, projectsController.createSubtask);
+router.put("/projects/:projectId/tasks/:taskId/subtasks/:subtaskId", resolveProjectAccess, projectsController.updateSubtask);
+router.delete("/projects/:projectId/tasks/:taskId/subtasks/:subtaskId", resolveProjectAccess, projectsController.deleteSubtask);
 
 // Task Dependencies (DAG)
 router.post("/projects/:projectId/dependencies", requireProjectManagerOrLeader, projectsController.createDependency);
 router.delete("/projects/:projectId/dependencies/:dependencyId", requireProjectManagerOrLeader, projectsController.deleteDependency);
 
 // SLA Incidents
-router.post("/projects/:projectId/incidents/:incidentId/resolve", resolveWorkspaceContext, projectsController.resolveIncident);
-router.post("/projects/:projectId/incidents/:incidentId/reassign", resolveWorkspaceContext, projectsController.reassignIncident);
+router.post("/projects/:projectId/incidents/:incidentId/resolve", resolveProjectAccess, projectsController.resolveIncident);
+router.post("/projects/:projectId/incidents/:incidentId/reassign", resolveProjectAccess, projectsController.reassignIncident);
 
 // Project Columns (Custom Kanban Columns)
 router.post("/projects/:projectId/columns", requireProjectManagerOrLeader, projectsController.createColumn);
@@ -54,13 +54,11 @@ router.put("/projects/:projectId/columns/reorder", requireProjectManagerOrLeader
 router.put("/projects/:projectId/columns/:columnId", requireProjectManagerOrLeader, projectsController.updateColumn);
 router.delete("/projects/:projectId/columns/:columnId", requireProjectManagerOrLeader, projectsController.deleteColumn);
 
-
 // Task & Subtask Comments
-router.get("/projects/:projectId/tasks/:taskId/comments", resolveWorkspaceContext, projectsController.getComments);
-router.post("/projects/:projectId/tasks/:taskId/comments", resolveWorkspaceContext, projectsController.createComment);
-router.put("/projects/:projectId/tasks/:taskId/comments/:commentId", resolveWorkspaceContext, projectsController.updateComment);
-router.post("/projects/:projectId/tasks/:taskId/comments/:commentId/resolve", resolveWorkspaceContext, projectsController.toggleResolveComment);
-router.delete("/projects/:projectId/tasks/:taskId/comments/:commentId", resolveWorkspaceContext, projectsController.deleteComment);
+router.get("/projects/:projectId/tasks/:taskId/comments", resolveProjectAccess, projectsController.getComments);
+router.post("/projects/:projectId/tasks/:taskId/comments", resolveProjectAccess, projectsController.createComment);
+router.put("/projects/:projectId/tasks/:taskId/comments/:commentId", resolveProjectAccess, projectsController.updateComment);
+router.post("/projects/:projectId/tasks/:taskId/comments/:commentId/resolve", resolveProjectAccess, projectsController.toggleResolveComment);
+router.delete("/projects/:projectId/tasks/:taskId/comments/:commentId", resolveProjectAccess, projectsController.deleteComment);
 
 export default router;
-
