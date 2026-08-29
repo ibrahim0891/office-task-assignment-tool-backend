@@ -9,13 +9,54 @@ import {
 
 // Default columns created for every new project
 const DEFAULT_COLUMNS = [
-    { name: "Backlog", order: 0, type: "BACKLOG" as const, isComplete: false },
-    { name: "To Do", order: 1, type: "TODO" as const, isComplete: false },
-    { name: "In Progress", order: 2, type: "IN_PROGRESS" as const, isComplete: false },
-    { name: "Need Attention", order: 3, type: "NEED_ATTENTION" as const, isComplete: false },
-    { name: "Completed", order: 4, type: "COMPLETED" as const, isComplete: true },
-    { name: "Cancelled", order: 5, type: "CANCELLED" as const, isComplete: false },
+    { name: "To Do", order: 0, type: "TODO" as const, isComplete: false },
+    { name: "In Progress", order: 1, type: "IN_PROGRESS" as const, isComplete: false },
+    { name: "Under Review", order: 2, type: "NEED_ATTENTION" as const, isComplete: false },
+    { name: "Completed", order: 3, type: "COMPLETED" as const, isComplete: true },
 ];
+
+export function getStageWeight(columnOrStatus: any): number {
+    if (!columnOrStatus) return 0;
+    const isComplete = typeof columnOrStatus === "object" ? Boolean(columnOrStatus.isComplete) : false;
+    if (isComplete) return 100;
+    const raw = (typeof columnOrStatus === "object" ? (columnOrStatus.name || columnOrStatus.type || "") : String(columnOrStatus)).toLowerCase().trim();
+    if (raw.includes("done") || raw.includes("complete") || raw === "completed") return 100;
+    if (raw.includes("review") || raw.includes("qa") || raw.includes("test") || raw.includes("attention") || raw === "need_attention") return 75;
+    if (raw.includes("progress") || raw.includes("doing") || raw.includes("dev") || raw === "in_progress") return 25;
+    return 0;
+}
+
+export function calculateTaskProgress(task: any, columnMap: Record<string, any> = {}): number {
+    if (!task) return 0;
+    const subtasks = task.subtasks || [];
+    if (subtasks.length > 0) {
+        let total = 0;
+        subtasks.forEach((st: any) => {
+            if (st.isCompleted) {
+                total += 100;
+            } else {
+                const col = st.columnId ? columnMap[st.columnId] : st.column;
+                total += getStageWeight(col || st.status);
+            }
+        });
+        return Math.round(total / subtasks.length);
+    }
+    if (task.isCompleted) return 100;
+    const taskCol = task.columnId ? columnMap[task.columnId] : task.column;
+    return getStageWeight(taskCol || task.status);
+}
+
+export function calculateProjectProgress(tasks: any[] = [], columns: any[] = []): number {
+    if (!tasks || tasks.length === 0) return 0;
+    const columnMap: Record<string, any> = {};
+    if (Array.isArray(columns)) {
+        columns.forEach((c) => {
+            if (c?.id) columnMap[c.id] = c;
+        });
+    }
+    const sum = tasks.reduce((acc, t) => acc + calculateTaskProgress(t, columnMap), 0);
+    return Math.round(sum / tasks.length);
+}
 
 function mapProjectStatus(status: string) {
     switch (status) {
@@ -128,8 +169,8 @@ export async function getProjectsList(teamId?: string, userId?: string, isWorksp
 
     const list = projects.map((p) => {
         const totalTasks = p.tasks.length;
-        const doneTasks = p.tasks.filter((t) => t.column.isComplete).length;
-        const progress = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
+        const doneTasks = p.tasks.filter((t) => t.column?.isComplete).length;
+        const progress = calculateProjectProgress(p.tasks, p.columns);
         const overdueTasks = p.tasks.filter(
             (t) => (t.riskLevel === "OVERDUE" || t.riskLevel === "CRITICAL_SLA") && !t.column.isComplete
         ).length;
@@ -285,8 +326,8 @@ export async function getProjectDetail(projectId: string) {
 
     // Recalculate progress
     const totalTasks = project.tasks.length;
-    const doneTasks = project.tasks.filter((t) => t.column.isComplete).length;
-    const progress = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
+    const doneTasks = project.tasks.filter((t) => t.column?.isComplete).length;
+    const progress = calculateProjectProgress(project.tasks, project.columns);
 
     // Get critical path IDs
     const criticalTaskIds = await calculateCriticalPath(projectId);
@@ -1604,6 +1645,10 @@ export async function deleteProjectColumn(columnId: string) {
         include: { tasks: true },
     });
     if (!col) throw new Error("Column not found.");
+
+    if (col.type !== "CUSTOM") {
+        throw new Error("Core system workflow stages cannot be deleted.");
+    }
 
     const totalColumns = await prisma.projectColumn.count({
         where: { projectId: col.projectId },
