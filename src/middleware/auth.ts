@@ -424,15 +424,25 @@ export async function resolveProjectAccess(req: Request, res: Response, next: Ne
         }
 
         const isManager = project.managerId === decoded.userId;
-        const isMember = project.members.some((m) => m.userId === decoded.userId);
+        const projectMember = project.members.find((m) => m.userId === decoded.userId);
         const teamRole = await getCachedMembershipRole(decoded.userId, project.teamId);
+        const isWorkspaceLeader = teamRole === Role.LEADER;
 
-        if (!isManager && !isMember && !teamRole) {
+        if (!isManager && !projectMember && !isWorkspaceLeader) {
             return sendResponse(res, 403, {
                 error: "Access denied. You are not a member of this project or its workspace.",
             });
         }
 
+        const isProjectLeader = isManager || isWorkspaceLeader || (projectMember?.role === "LEADER" || projectMember?.role === "MANAGER");
+        const isViewer = !isProjectLeader && projectMember?.role === "VIEWER";
+
+        (req as any).project = project;
+        (req as any).projectMember = projectMember;
+        (req as any).isProjectManager = isManager;
+        (req as any).isProjectLeader = isProjectLeader;
+        (req as any).isWorkspaceLeader = isWorkspaceLeader;
+        (req as any).isProjectViewer = isViewer;
         (req as any).userRole = teamRole || (isManager ? Role.LEADER : Role.MEMBER);
         (req as any).workspaceTeamId = project.teamId;
         next();

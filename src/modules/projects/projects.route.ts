@@ -61,4 +61,29 @@ router.put("/projects/:projectId/tasks/:taskId/comments/:commentId", resolveProj
 router.post("/projects/:projectId/tasks/:taskId/comments/:commentId/resolve", resolveProjectAccess, projectsController.toggleResolveComment);
 router.delete("/projects/:projectId/tasks/:taskId/comments/:commentId", resolveProjectAccess, projectsController.deleteComment);
 
+// Project Assets & Documentation (Links, Specs, Docs)
+router.get("/projects/:projectId/assets", resolveProjectAccess, projectsController.getAssets);
+router.post("/projects/:projectId/assets", resolveProjectAccess, projectsController.createAsset);
+router.put("/projects/:projectId/assets/:assetId", resolveProjectAccess, projectsController.updateAsset);
+router.delete("/projects/:projectId/assets/:assetId", resolveProjectAccess, projectsController.deleteAsset);
+router.patch("/projects/:projectId/assets/:assetId/pin", resolveProjectAccess, projectsController.togglePinAsset);
+
+// Project Custom Categories
+router.get("/projects/:projectId/categories", resolveProjectAccess, projectsController.getCategories);
+router.post("/projects/:projectId/categories", resolveProjectAccess, projectsController.createCategory);
+router.put("/projects/:projectId/categories/:categoryId", resolveProjectAccess, projectsController.updateCategory);
+router.delete("/projects/:projectId/categories/:categoryId", resolveProjectAccess, projectsController.deleteCategory);
+
+// Project Documents (Rich-Text Docs)
+router.get("/projects/:projectId/docs", resolveProjectAccess, projectsController.getDocs);
+router.post("/projects/:projectId/docs", resolveProjectAccess, projectsController.createDoc);
+router.put("/projects/:projectId/docs/:docId", resolveProjectAccess, projectsController.updateDoc);
+router.delete("/projects/:projectId/docs/:docId", resolveProjectAccess, projectsController.deleteDoc);
+
+// Project Links & External Resources
+router.get("/projects/:projectId/links", resolveProjectAccess, projectsController.getLinks);
+router.post("/projects/:projectId/links", resolveProjectAccess, projectsController.createLink);
+router.put("/projects/:projectId/links/:linkId", resolveProjectAccess, projectsController.updateLink);
+router.delete("/projects/:projectId/links/:linkId", resolveProjectAccess, projectsController.deleteLink);
+
 export default router;
