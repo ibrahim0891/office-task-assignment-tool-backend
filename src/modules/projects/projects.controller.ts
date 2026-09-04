@@ -820,3 +820,451 @@ export async function toggleResolveComment(req: Request, res: Response) {
         sendResponse(res, 400, { error: error.message });
     }
 }
+
+
+// ==========================================
+// PROJECT ASSETS & DOCUMENTATION CONTROLLERS
+// ==========================================
+
+export async function getAssets(req: Request, res: Response) {
+    try {
+        const { projectId } = req.params;
+        const { category, type, isPinned, search } = req.query;
+        const assets = await projectsService.getProjectAssets(projectId, {
+            category: category as string,
+            type: type as string,
+            isPinned: isPinned !== undefined ? isPinned === "true" : undefined,
+            search: search as string,
+        });
+        sendResponse(res, 200, assets);
+    } catch (error: any) {
+        sendResponse(res, 500, { error: error.message });
+    }
+}
+
+export async function createAsset(req: Request, res: Response) {
+    try {
+        const { projectId } = req.params;
+        const userId = (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
+        const asset = await projectsService.createProjectAsset(projectId, req.body, userId);
+
+        const project = (req as any).project || await prisma.project.findUnique({ where: { id: projectId } });
+        if (project) {
+            notifyTeam(project.teamId, "project_updated", {
+                projectId,
+                action: "asset_created",
+                assetId: asset.id,
+                userId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 201, asset);
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+export async function updateAsset(req: Request, res: Response) {
+    try {
+        const { projectId, assetId } = req.params;
+        const userId = (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
+        const isLeaderOrManager = Boolean((req as any).isProjectManager || (req as any).isProjectLeader || (req as any).isWorkspaceLeader);
+
+        const asset = await projectsService.updateProjectAsset(projectId, assetId, req.body, userId, isLeaderOrManager);
+
+        const project = (req as any).project || await prisma.project.findUnique({ where: { id: projectId } });
+        if (project) {
+            notifyTeam(project.teamId, "project_updated", {
+                projectId,
+                action: "asset_updated",
+                assetId,
+                userId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 200, asset);
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+export async function deleteAsset(req: Request, res: Response) {
+    try {
+        const { projectId, assetId } = req.params;
+        const userId = (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
+        const isLeaderOrManager = Boolean((req as any).isProjectManager || (req as any).isProjectLeader || (req as any).isWorkspaceLeader);
+
+        await projectsService.deleteProjectAsset(projectId, assetId, userId, isLeaderOrManager);
+
+        const project = (req as any).project || await prisma.project.findUnique({ where: { id: projectId } });
+        if (project) {
+            notifyTeam(project.teamId, "project_updated", {
+                projectId,
+                action: "asset_deleted",
+                assetId,
+                userId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 200, { message: "Asset deleted successfully." });
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+export async function togglePinAsset(req: Request, res: Response) {
+    try {
+        const { projectId, assetId } = req.params;
+        const userId = (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
+        const isLeaderOrManager = Boolean((req as any).isProjectManager || (req as any).isProjectLeader || (req as any).isWorkspaceLeader);
+
+        const asset = await projectsService.togglePinAsset(projectId, assetId, userId, isLeaderOrManager);
+
+        const project = (req as any).project || await prisma.project.findUnique({ where: { id: projectId } });
+        if (project) {
+            notifyTeam(project.teamId, "project_updated", {
+                projectId,
+                action: "asset_pinned",
+                assetId,
+                userId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 200, asset);
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+// ==========================================
+// PROJECT CATEGORIES CONTROLLERS
+// ==========================================
+
+export async function getCategories(req: Request, res: Response) {
+    try {
+        const { projectId } = req.params;
+        const categories = await projectsService.getProjectCategories(projectId);
+        sendResponse(res, 200, categories);
+    } catch (error: any) {
+        sendResponse(res, 500, { error: error.message });
+    }
+}
+
+export async function createCategory(req: Request, res: Response) {
+    try {
+        const { projectId } = req.params;
+        const isViewer = Boolean((req as any).isProjectViewer);
+        if (isViewer) {
+            return sendResponse(res, 403, { error: "Viewers have read-only access and cannot create categories." });
+        }
+
+        const category = await projectsService.createProjectCategory(projectId, req.body);
+
+        const project = (req as any).project || await prisma.project.findUnique({ where: { id: projectId } });
+        if (project) {
+            notifyTeam(project.teamId, "project_updated", {
+                projectId,
+                action: "category_created",
+                categoryId: category.id,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 201, category);
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+export async function updateCategory(req: Request, res: Response) {
+    try {
+        const { projectId, categoryId } = req.params;
+        const isLeaderOrManager = Boolean((req as any).isProjectManager || (req as any).isProjectLeader || (req as any).isWorkspaceLeader);
+        const isViewer = Boolean((req as any).isProjectViewer);
+
+        if (isViewer || !isLeaderOrManager) {
+            return sendResponse(res, 403, { error: "Only project leaders and managers can manage custom categories." });
+        }
+
+        const category = await projectsService.updateProjectCategory(projectId, categoryId, req.body);
+
+        const project = (req as any).project || await prisma.project.findUnique({ where: { id: projectId } });
+        if (project) {
+            notifyTeam(project.teamId, "project_updated", {
+                projectId,
+                action: "category_updated",
+                categoryId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 200, category);
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+export async function deleteCategory(req: Request, res: Response) {
+    try {
+        const { projectId, categoryId } = req.params;
+        const isLeaderOrManager = Boolean((req as any).isProjectManager || (req as any).isProjectLeader || (req as any).isWorkspaceLeader);
+        const isViewer = Boolean((req as any).isProjectViewer);
+
+        if (isViewer || !isLeaderOrManager) {
+            return sendResponse(res, 403, { error: "Only project leaders and managers can delete custom categories." });
+        }
+
+        const result = await projectsService.deleteProjectCategory(projectId, categoryId);
+
+        const project = (req as any).project || await prisma.project.findUnique({ where: { id: projectId } });
+        if (project) {
+            notifyTeam(project.teamId, "project_updated", {
+                projectId,
+                action: "category_deleted",
+                categoryId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 200, result);
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+// ==========================================
+// PROJECT DOCUMENTS CONTROLLERS
+// ==========================================
+
+export async function getDocs(req: Request, res: Response) {
+    try {
+        const { projectId } = req.params;
+        const { categoryId, search } = req.query;
+        const docs = await projectsService.getProjectDocs(projectId, {
+            categoryId: categoryId as string,
+            search: search as string,
+        });
+        sendResponse(res, 200, docs);
+    } catch (error: any) {
+        sendResponse(res, 500, { error: error.message });
+    }
+}
+
+export async function createDoc(req: Request, res: Response) {
+    try {
+        const { projectId } = req.params;
+        const userId = (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
+        const isViewer = Boolean((req as any).isProjectViewer);
+
+        if (!userId) {
+            return sendResponse(res, 401, { error: "Authentication required." });
+        }
+        if (isViewer) {
+            return sendResponse(res, 403, { error: "Viewers have read-only access and cannot create documents." });
+        }
+
+        const doc = await projectsService.createProjectDoc(projectId, req.body, userId);
+
+        const project = (req as any).project || await prisma.project.findUnique({ where: { id: projectId } });
+        if (project) {
+            notifyTeam(project.teamId, "project_updated", {
+                projectId,
+                action: "doc_created",
+                docId: doc.id,
+                userId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 201, doc);
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+export async function updateDoc(req: Request, res: Response) {
+    try {
+        const { projectId, docId } = req.params;
+        const userId = (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
+        const isLeaderOrManager = Boolean((req as any).isProjectManager || (req as any).isProjectLeader || (req as any).isWorkspaceLeader);
+        const isViewer = Boolean((req as any).isProjectViewer);
+
+        if (!userId) {
+            return sendResponse(res, 401, { error: "Authentication required." });
+        }
+        if (isViewer) {
+            return sendResponse(res, 403, { error: "Viewers have read-only access and cannot edit documents." });
+        }
+
+        const doc = await projectsService.updateProjectDoc(projectId, docId, req.body, userId, isLeaderOrManager);
+
+        const project = (req as any).project || await prisma.project.findUnique({ where: { id: projectId } });
+        if (project) {
+            notifyTeam(project.teamId, "project_updated", {
+                projectId,
+                action: "doc_updated",
+                docId,
+                userId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 200, doc);
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+export async function deleteDoc(req: Request, res: Response) {
+    try {
+        const { projectId, docId } = req.params;
+        const userId = (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
+        const isLeaderOrManager = Boolean((req as any).isProjectManager || (req as any).isProjectLeader || (req as any).isWorkspaceLeader);
+        const isViewer = Boolean((req as any).isProjectViewer);
+
+        if (!userId) {
+            return sendResponse(res, 401, { error: "Authentication required." });
+        }
+        if (isViewer) {
+            return sendResponse(res, 403, { error: "Viewers have read-only access and cannot delete documents." });
+        }
+
+        await projectsService.deleteProjectDoc(projectId, docId, userId, isLeaderOrManager);
+
+        const project = (req as any).project || await prisma.project.findUnique({ where: { id: projectId } });
+        if (project) {
+            notifyTeam(project.teamId, "project_updated", {
+                projectId,
+                action: "doc_deleted",
+                docId,
+                userId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 200, { message: "Document deleted successfully." });
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+// ==========================================
+// PROJECT LINKS CONTROLLERS
+// ==========================================
+
+export async function getLinks(req: Request, res: Response) {
+    try {
+        const { projectId } = req.params;
+        const { categoryId, search } = req.query;
+        const links = await projectsService.getProjectLinks(projectId, {
+            categoryId: categoryId as string,
+            search: search as string,
+        });
+        sendResponse(res, 200, links);
+    } catch (error: any) {
+        sendResponse(res, 500, { error: error.message });
+    }
+}
+
+export async function createLink(req: Request, res: Response) {
+    try {
+        const { projectId } = req.params;
+        const userId = (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
+        const isViewer = Boolean((req as any).isProjectViewer);
+
+        if (!userId) {
+            return sendResponse(res, 401, { error: "Authentication required." });
+        }
+        if (isViewer) {
+            return sendResponse(res, 403, { error: "Viewers have read-only access and cannot add links." });
+        }
+
+        const link = await projectsService.createProjectLink(projectId, req.body, userId);
+
+        const project = (req as any).project || await prisma.project.findUnique({ where: { id: projectId } });
+        if (project) {
+            notifyTeam(project.teamId, "project_updated", {
+                projectId,
+                action: "link_created",
+                linkId: link.id,
+                userId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 201, link);
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+export async function updateLink(req: Request, res: Response) {
+    try {
+        const { projectId, linkId } = req.params;
+        const userId = (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
+        const isLeaderOrManager = Boolean((req as any).isProjectManager || (req as any).isProjectLeader || (req as any).isWorkspaceLeader);
+        const isViewer = Boolean((req as any).isProjectViewer);
+
+        if (!userId) {
+            return sendResponse(res, 401, { error: "Authentication required." });
+        }
+        if (isViewer) {
+            return sendResponse(res, 403, { error: "Viewers have read-only access and cannot edit links." });
+        }
+
+        const link = await projectsService.updateProjectLink(projectId, linkId, req.body, userId, isLeaderOrManager);
+
+        const project = (req as any).project || await prisma.project.findUnique({ where: { id: projectId } });
+        if (project) {
+            notifyTeam(project.teamId, "project_updated", {
+                projectId,
+                action: "link_updated",
+                linkId,
+                userId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 200, link);
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+export async function deleteLink(req: Request, res: Response) {
+    try {
+        const { projectId, linkId } = req.params;
+        const userId = (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
+        const isLeaderOrManager = Boolean((req as any).isProjectManager || (req as any).isProjectLeader || (req as any).isWorkspaceLeader);
+        const isViewer = Boolean((req as any).isProjectViewer);
+
+        if (!userId) {
+            return sendResponse(res, 401, { error: "Authentication required." });
+        }
+        if (isViewer) {
+            return sendResponse(res, 403, { error: "Viewers have read-only access and cannot delete links." });
+        }
+
+        await projectsService.deleteProjectLink(projectId, linkId, userId, isLeaderOrManager);
+
+        const project = (req as any).project || await prisma.project.findUnique({ where: { id: projectId } });
+        if (project) {
+            notifyTeam(project.teamId, "project_updated", {
+                projectId,
+                action: "link_deleted",
+                linkId,
+                userId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 200, { message: "Link deleted successfully." });
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
