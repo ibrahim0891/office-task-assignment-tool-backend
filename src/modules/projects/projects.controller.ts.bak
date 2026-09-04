@@ -55,11 +55,6 @@ export async function createProject(req: Request, res: Response) {
             creatorId: userId,
             timestamp: Date.now(),
         });
-        notifyTeam(project.teamId, "project_updated", {
-            projectId: project.id,
-            action: "project_create",
-            timestamp: Date.now(),
-        });
 
         sendResponse(res, 201, project);
     } catch (error: any) {
@@ -74,7 +69,6 @@ export async function updateProject(req: Request, res: Response) {
 
         notifyTeam(project.teamId, "project_updated", {
             projectId: project.id,
-            action: "project_update",
             timestamp: Date.now(),
         });
 
@@ -91,11 +85,6 @@ export async function deleteProject(req: Request, res: Response) {
 
         notifyTeam(deleted.teamId, "project_deleted", {
             projectId: deleted.id,
-            timestamp: Date.now(),
-        });
-        notifyTeam(deleted.teamId, "project_updated", {
-            projectId: deleted.id,
-            action: "project_delete",
             timestamp: Date.now(),
         });
 
@@ -124,20 +113,6 @@ export async function addMember(req: Request, res: Response) {
     try {
         const { projectId } = req.params;
         const member = await projectsService.addProjectMember(projectId, req.body);
-
-        const project = await prisma.project.findUnique({
-            where: { id: projectId },
-            select: { teamId: true },
-        });
-        if (project?.teamId) {
-            notifyTeam(project.teamId, "project_updated", {
-                projectId,
-                memberId: member.id,
-                action: "member_add",
-                timestamp: Date.now(),
-            });
-        }
-
         sendResponse(res, 201, member);
     } catch (error: any) {
         sendResponse(res, 400, { error: error.message });
@@ -166,20 +141,6 @@ export async function updateMember(req: Request, res: Response) {
         }
 
         const member = await projectsService.updateProjectMember(memberId, req.body, actingUserId);
-
-        const project = await prisma.project.findUnique({
-            where: { id: projectId },
-            select: { teamId: true },
-        });
-        if (project?.teamId) {
-            notifyTeam(project.teamId, "project_updated", {
-                projectId,
-                memberId: member.id,
-                action: "member_update",
-                timestamp: Date.now(),
-            });
-        }
-
         sendResponse(res, 200, member);
     } catch (error: any) {
         sendResponse(res, 400, { error: error.message });
@@ -190,22 +151,7 @@ export async function removeMember(req: Request, res: Response) {
     try {
         const { memberId } = req.params;
         const actingUserId = (req.headers["x-user-id"] as string) || (req as any).user?.id;
-        const existing = await prisma.projectMember.findUnique({
-            where: { id: memberId },
-            select: { projectId: true, project: { select: { teamId: true } } },
-        });
-
         await projectsService.removeProjectMember(memberId, actingUserId);
-
-        if (existing?.project?.teamId) {
-            notifyTeam(existing.project.teamId, "project_updated", {
-                projectId: existing.projectId,
-                memberId,
-                action: "member_remove",
-                timestamp: Date.now(),
-            });
-        }
-
         sendResponse(res, 200, { message: "Member removed." });
     } catch (error: any) {
         sendResponse(res, 400, { error: error.message });
@@ -221,21 +167,6 @@ export async function createTask(req: Request, res: Response) {
         const { projectId } = req.params;
         const userId = req.headers["x-user-id"] as string;
         const task = await projectsService.createProjectTask(projectId, req.body, userId);
-
-        const project = await prisma.project.findUnique({
-            where: { id: projectId },
-            select: { teamId: true },
-        });
-        if (project?.teamId) {
-            notifyTeam(project.teamId, "project_updated", {
-                projectId,
-                taskId: task.id,
-                action: "task_create",
-                actingUserId: userId,
-                timestamp: Date.now(),
-            });
-        }
-
         sendResponse(res, 201, task);
     } catch (error: any) {
         sendResponse(res, 400, { error: error.message });
@@ -245,23 +176,7 @@ export async function createTask(req: Request, res: Response) {
 export async function updateTask(req: Request, res: Response) {
     try {
         const { taskId } = req.params;
-        const actingUserId = (req.headers["x-user-id"] as string) || (req as any).user?.id;
         const task = await projectsService.updateProjectTask(taskId, req.body);
-
-        const project = await prisma.project.findUnique({
-            where: { id: task.projectId },
-            select: { teamId: true },
-        });
-        if (project?.teamId) {
-            notifyTeam(project.teamId, "project_updated", {
-                projectId: task.projectId,
-                taskId: task.id,
-                action: "task_update",
-                actingUserId,
-                timestamp: Date.now(),
-            });
-        }
-
         sendResponse(res, 200, task);
     } catch (error: any) {
         sendResponse(res, 400, { error: error.message });
@@ -271,24 +186,7 @@ export async function updateTask(req: Request, res: Response) {
 export async function deleteTask(req: Request, res: Response) {
     try {
         const { taskId } = req.params;
-        const actingUserId = (req.headers["x-user-id"] as string) || (req as any).user?.id;
-        const existing = await prisma.projectTask.findUnique({
-            where: { id: taskId },
-            select: { projectId: true, project: { select: { teamId: true } } },
-        });
-
         await projectsService.deleteProjectTask(taskId);
-
-        if (existing?.project?.teamId) {
-            notifyTeam(existing.project.teamId, "project_updated", {
-                projectId: existing.projectId,
-                taskId,
-                action: "task_delete",
-                actingUserId,
-                timestamp: Date.now(),
-            });
-        }
-
         sendResponse(res, 200, { message: "Task deleted." });
     } catch (error: any) {
         sendResponse(res, 400, { error: error.message });
@@ -300,21 +198,6 @@ export async function reworkTask(req: Request, res: Response) {
         const { taskId } = req.params;
         const userId = req.headers["x-user-id"] as string;
         const task = await projectsService.reworkProjectTask(taskId, req.body, userId);
-
-        const project = await prisma.project.findUnique({
-            where: { id: task.projectId },
-            select: { teamId: true },
-        });
-        if (project?.teamId) {
-            notifyTeam(project.teamId, "project_updated", {
-                projectId: task.projectId,
-                taskId: task.id,
-                action: "task_rework",
-                actingUserId: userId,
-                timestamp: Date.now(),
-            });
-        }
-
         sendResponse(res, 200, task);
     } catch (error: any) {
         sendResponse(res, 400, { error: error.message });
@@ -330,22 +213,6 @@ export async function createSubtask(req: Request, res: Response) {
         const { taskId } = req.params;
         const actingUserId = (req as any).user?.userId || (req.headers["x-user-id"] as string);
         const subtask = await projectsService.createProjectSubtask(taskId, req.body, actingUserId);
-
-        const parentTask = await prisma.projectTask.findUnique({
-            where: { id: taskId },
-            select: { projectId: true, project: { select: { teamId: true } } },
-        });
-        if (parentTask?.project?.teamId) {
-            notifyTeam(parentTask.project.teamId, "project_updated", {
-                projectId: parentTask.projectId,
-                taskId,
-                subtaskId: subtask.id,
-                action: "subtask_create",
-                actingUserId,
-                timestamp: Date.now(),
-            });
-        }
-
         sendResponse(res, 201, subtask);
     } catch (error: any) {
         if (error.message?.includes("Access denied")) {
@@ -360,22 +227,6 @@ export async function updateSubtask(req: Request, res: Response) {
         const { subtaskId } = req.params;
         const actingUserId = (req as any).user?.userId || (req.headers["x-user-id"] as string);
         const subtask = await projectsService.updateProjectSubtask(subtaskId, req.body, actingUserId);
-
-        const existing = await prisma.projectSubtask.findUnique({
-            where: { id: subtaskId },
-            select: { parentTaskId: true, parentTask: { select: { projectId: true, project: { select: { teamId: true } } } } },
-        });
-        if (existing?.parentTask?.project?.teamId) {
-            notifyTeam(existing.parentTask.project.teamId, "project_updated", {
-                projectId: existing.parentTask.projectId,
-                taskId: existing.parentTaskId,
-                subtaskId,
-                action: "subtask_update",
-                actingUserId,
-                timestamp: Date.now(),
-            });
-        }
-
         sendResponse(res, 200, subtask);
     } catch (error: any) {
         if (error.message?.includes("Access denied")) {
@@ -389,24 +240,7 @@ export async function deleteSubtask(req: Request, res: Response) {
     try {
         const { subtaskId } = req.params;
         const actingUserId = (req as any).user?.userId || (req.headers["x-user-id"] as string);
-        const existing = await prisma.projectSubtask.findUnique({
-            where: { id: subtaskId },
-            select: { parentTaskId: true, parentTask: { select: { projectId: true, project: { select: { teamId: true } } } } },
-        });
-
         await projectsService.deleteProjectSubtask(subtaskId, actingUserId);
-
-        if (existing?.parentTask?.project?.teamId) {
-            notifyTeam(existing.parentTask.project.teamId, "project_updated", {
-                projectId: existing.parentTask.projectId,
-                taskId: existing.parentTaskId,
-                subtaskId,
-                action: "subtask_delete",
-                actingUserId,
-                timestamp: Date.now(),
-            });
-        }
-
         sendResponse(res, 200, { message: "Subtask deleted." });
     } catch (error: any) {
         if (error.message?.includes("Access denied")) {
@@ -424,19 +258,6 @@ export async function createDependency(req: Request, res: Response) {
     try {
         const { projectId } = req.params;
         const dependency = await projectsService.createTaskDependency(projectId, req.body);
-
-        const project = await prisma.project.findUnique({
-            where: { id: projectId },
-            select: { teamId: true },
-        });
-        if (project?.teamId) {
-            notifyTeam(project.teamId, "project_updated", {
-                projectId,
-                action: "dependency_create",
-                timestamp: Date.now(),
-            });
-        }
-
         sendResponse(res, 201, dependency);
     } catch (error: any) {
         sendResponse(res, 400, { error: error.message });
@@ -446,21 +267,7 @@ export async function createDependency(req: Request, res: Response) {
 export async function deleteDependency(req: Request, res: Response) {
     try {
         const { dependencyId } = req.params;
-        const existing = await prisma.taskDependency.findUnique({
-            where: { id: dependencyId },
-            select: { projectId: true, project: { select: { teamId: true } } },
-        });
-
         await projectsService.deleteTaskDependency(dependencyId);
-
-        if (existing?.project?.teamId) {
-            notifyTeam(existing.project.teamId, "project_updated", {
-                projectId: existing.projectId,
-                action: "dependency_delete",
-                timestamp: Date.now(),
-            });
-        }
-
         sendResponse(res, 200, { message: "Dependency deleted." });
     } catch (error: any) {
         sendResponse(res, 400, { error: error.message });
@@ -476,19 +283,6 @@ export async function resolveIncident(req: Request, res: Response) {
         const { incidentId } = req.params;
         const userId = req.headers["x-user-id"] as string;
         const incident = await projectsService.resolveProjectIncident(incidentId, userId);
-
-        const existing = await prisma.projectIncident.findUnique({
-            where: { id: incidentId },
-            select: { projectId: true, project: { select: { teamId: true } } },
-        });
-        if (existing?.project?.teamId) {
-            notifyTeam(existing.project.teamId, "project_updated", {
-                projectId: existing.projectId,
-                action: "incident_resolve",
-                timestamp: Date.now(),
-            });
-        }
-
         sendResponse(res, 200, incident);
     } catch (error: any) {
         sendResponse(res, 400, { error: error.message });
@@ -504,19 +298,6 @@ export async function reassignIncident(req: Request, res: Response) {
             return sendResponse(res, 400, { error: "newAssigneeId is required." });
         }
         const incident = await projectsService.reassignIncidentTask(incidentId, newAssigneeId, userId);
-
-        const existing = await prisma.projectIncident.findUnique({
-            where: { id: incidentId },
-            select: { projectId: true, project: { select: { teamId: true } } },
-        });
-        if (existing?.project?.teamId) {
-            notifyTeam(existing.project.teamId, "project_updated", {
-                projectId: existing.projectId,
-                action: "incident_reassign",
-                timestamp: Date.now(),
-            });
-        }
-
         sendResponse(res, 200, incident);
     } catch (error: any) {
         sendResponse(res, 400, { error: error.message });
@@ -630,20 +411,6 @@ export async function createColumn(req: Request, res: Response) {
         if (!name) return sendResponse(res, 400, { error: "Column name is required." });
 
         const column = await projectsService.createProjectColumn(projectId, name, type, isComplete);
-
-        const project = await prisma.project.findUnique({
-            where: { id: projectId },
-            select: { teamId: true },
-        });
-        if (project?.teamId) {
-            notifyTeam(project.teamId, "project_updated", {
-                projectId,
-                columnId: column.id,
-                action: "column_create",
-                timestamp: Date.now(),
-            });
-        }
-
         sendResponse(res, 201, column);
     } catch (error: any) {
         sendResponse(res, 400, { error: error.message });
@@ -656,20 +423,6 @@ export async function updateColumn(req: Request, res: Response) {
         const { name, type, isComplete } = req.body;
 
         const column = await projectsService.updateProjectColumn(columnId, name, type, isComplete);
-
-        const project = await prisma.project.findUnique({
-            where: { id: column.projectId },
-            select: { teamId: true },
-        });
-        if (project?.teamId) {
-            notifyTeam(project.teamId, "project_updated", {
-                projectId: column.projectId,
-                columnId,
-                action: "column_update",
-                timestamp: Date.now(),
-            });
-        }
-
         sendResponse(res, 200, column);
     } catch (error: any) {
         sendResponse(res, 400, { error: error.message });
@@ -679,22 +432,7 @@ export async function updateColumn(req: Request, res: Response) {
 export async function deleteColumn(req: Request, res: Response) {
     try {
         const { columnId } = req.params;
-        const existing = await prisma.projectColumn.findUnique({
-            where: { id: columnId },
-            select: { projectId: true, project: { select: { teamId: true } } },
-        });
-
         const result = await projectsService.deleteProjectColumn(columnId);
-
-        if (existing?.project?.teamId) {
-            notifyTeam(existing.project.teamId, "project_updated", {
-                projectId: existing.projectId,
-                columnId,
-                action: "column_delete",
-                timestamp: Date.now(),
-            });
-        }
-
         sendResponse(res, 200, result);
     } catch (error: any) {
         sendResponse(res, 400, { error: error.message });
@@ -710,24 +448,13 @@ export async function reorderColumns(req: Request, res: Response) {
         }
 
         const columns = await projectsService.reorderProjectColumns(projectId, columnOrders);
-
-        const project = await prisma.project.findUnique({
-            where: { id: projectId },
-            select: { teamId: true },
-        });
-        if (project?.teamId) {
-            notifyTeam(project.teamId, "project_updated", {
-                projectId,
-                action: "column_reorder",
-                timestamp: Date.now(),
-            });
-        }
-
         sendResponse(res, 200, columns);
     } catch (error: any) {
         sendResponse(res, 400, { error: error.message });
     }
 }
+
+
 
 // ----------------------------------------------------
 // PROJECT TASK & SUBTASK COMMENTS CONTROLLER

@@ -836,7 +836,8 @@ export async function createProjectTask(projectId: string, data: any, createdByI
                 await createNotification({
                     userId: uId,
                     content: `You were assigned to main task "${task.title}" in project "${project.title}".`,
-                    type: "TASK_ASSIGNED",
+                    type: "PROJECT_TASK_ASSIGNED",
+                    taskId: `project:${projectId}:task:${task.id}`,
                     teamId: project.teamId,
                 }).catch((err) => console.error("Failed to create task notification:", err));
             }
@@ -1027,7 +1028,7 @@ export async function createProjectSubtask(taskId: string, data: any, actingUser
         }
     }
 
-    return await prisma.projectSubtask.create({
+    const createdSubtask = await prisma.projectSubtask.create({
         data: {
             parentTaskId: taskId,
             columnId: targetColumnId,
@@ -1044,6 +1045,18 @@ export async function createProjectSubtask(taskId: string, data: any, actingUser
         },
         include: { assignedTo: true, reviewer: true, column: true },
     });
+
+    if (targetAssigneeId && targetAssigneeId !== actingUserId) {
+        await createNotification({
+            userId: targetAssigneeId,
+            content: `You were assigned subtask "${data.title}" in project "${parentTask.project.title}".`,
+            type: "PROJECT_SUBTASK_ASSIGNED",
+            taskId: `project:${parentTask.projectId}:task:${taskId}:subtask:${createdSubtask.id}`,
+            teamId: parentTask.project.teamId,
+        }).catch((err) => console.error("Failed to create subtask notification:", err));
+    }
+
+    return createdSubtask;
 }
 
 export async function updateProjectSubtask(subtaskId: string, data: any, actingUserId?: string) {
@@ -1792,11 +1805,23 @@ export async function createProjectTaskComment(
     if (subtaskTarget && subtaskTarget.assignedToId && subtaskTarget.assignedToId !== userId) {
         await createNotification({
             userId: subtaskTarget.assignedToId,
-            type: "COMMENT_MENTION",
+            type: "PROJECT_SUBTASK_COMMENT",
             content: `${authorName} commented on your subtask "${subtaskTarget.title}": "${content.trim().slice(0, 60)}"`,
-            taskId,
+            taskId: `project:${projectId}:task:${taskId}:subtask:${subtaskId}`,
             teamId,
         }).catch((e) => console.error("Notification error:", e));
+    } else if (!subtaskId && Array.isArray(task.assignees)) {
+        for (const a of task.assignees) {
+            if (a.userId && a.userId !== userId) {
+                await createNotification({
+                    userId: a.userId,
+                    type: "PROJECT_TASK_COMMENT",
+                    content: `${authorName} commented on task "${task.title}": "${content.trim().slice(0, 60)}"`,
+                    taskId: `project:${projectId}:task:${taskId}`,
+                    teamId,
+                }).catch((e) => console.error("Notification error:", e));
+            }
+        }
     }
 
     return { comment, activity };
