@@ -125,6 +125,9 @@ model User {
   projectTaskActivities    ProjectTaskActivity[]
   sentProjectInvitations   ProjectInvitation[]   @relation("SentProjectInvitations")
   receivedProjectInvitations ProjectInvitation[] @relation("ReceivedProjectInvitations")
+  createdProjectAssets     ProjectAsset[]        @relation("ProjectAssetCreatedBy")
+  createdProjectDocs       ProjectDoc[]          @relation("ProjectDocCreatedBy")
+  createdProjectLinks      ProjectLink[]         @relation("ProjectLinkCreatedBy")
 }
 
 model Team {
@@ -393,6 +396,10 @@ model Project {
   dependencies TaskDependency[]
   incidents    ProjectIncident[]
   invitations  ProjectInvitation[]
+  assets       ProjectAsset[]
+  categories   ProjectCategory[]
+  docs         ProjectDoc[]
+  links        ProjectLink[]
 
   @@index([teamId])
   @@index([folderId])
@@ -666,4 +673,102 @@ model ProjectTaskActivity {
   @@index([taskId])
   @@index([subtaskId])
   @@index([userId])
+}
+
+
+enum ProjectAssetType {
+  LINK
+  DOC
+}
+
+enum ProjectAssetCategory {
+  CODE
+  DESIGN
+  DOCS
+  SHEET
+  DEPLOYMENT
+  MEETING
+  GENERAL
+}
+
+model ProjectAsset {
+  id          String               @id @default(uuid())
+  projectId   String
+  title       String
+  type        ProjectAssetType     @default(LINK)
+  category    ProjectAssetCategory @default(GENERAL)
+  url         String?
+  content     String?              @db.Text
+  description String?              @db.Text
+  isPinned    Boolean              @default(false)
+  createdById String
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy User    @relation("ProjectAssetCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([createdById])
+  @@index([projectId, category])
+  @@index([projectId, isPinned])
+  @@index([projectId, type])
+}
+
+
+// 1. User-Created Project Categories
+model ProjectCategory {
+  id          String        @id @default(uuid())
+  projectId   String
+  name        String
+  color       String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  project     Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  docs        ProjectDoc[]
+  links       ProjectLink[]
+
+  @@index([projectId])
+}
+
+// 2. Project Rich-Text Documents
+model ProjectDoc {
+  id          String           @id @default(uuid())
+  projectId   String
+  categoryId  String?
+  title       String
+  content     String           @db.Text
+  createdById String
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  project     Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  category    ProjectCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  createdBy   User             @relation("ProjectDocCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([categoryId])
+  @@index([createdById])
+}
+
+// 3. Project External Links & Resources
+model ProjectLink {
+  id          String           @id @default(uuid())
+  projectId   String
+  categoryId  String?
+  title       String
+  url         String
+  description String?          @db.Text
+  createdById String
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  project     Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  category    ProjectCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  createdBy   User             @relation("ProjectLinkCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([categoryId])
+  @@index([createdById])
 }
