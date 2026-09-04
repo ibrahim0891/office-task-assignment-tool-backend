@@ -319,6 +319,43 @@ export async function getProjectDetail(projectId: string) {
                 include: { receiver: { select: { id: true, name: true, email: true, avatarUrl: true } }, sender: { select: { id: true, name: true } } },
                 orderBy: { createdAt: "desc" },
             },
+            assets: {
+                include: {
+                    createdBy: {
+                        select: { id: true, name: true, fullName: true, avatarUrl: true },
+                    },
+                },
+                orderBy: [
+                    { isPinned: "desc" },
+                    { createdAt: "desc" },
+                ],
+            },
+            categories: {
+                include: {
+                    _count: {
+                        select: { docs: true, links: true },
+                    },
+                },
+                orderBy: { createdAt: "asc" },
+            },
+            docs: {
+                include: {
+                    category: true,
+                    createdBy: {
+                        select: { id: true, name: true, fullName: true, avatarUrl: true },
+                    },
+                },
+                orderBy: { updatedAt: "desc" },
+            },
+            links: {
+                include: {
+                    category: true,
+                    createdBy: {
+                        select: { id: true, name: true, fullName: true, avatarUrl: true },
+                    },
+                },
+                orderBy: { createdAt: "desc" },
+            },
         },
     });
 
@@ -1985,3 +2022,604 @@ export async function toggleResolveProjectTaskComment(
 
     return { comment: updated, activity };
 }
+
+
+// ==========================================
+// PROJECT ASSETS & DOCUMENTATION SERVICES
+// ==========================================
+
+export async function getProjectAssets(
+    projectId: string,
+    filters?: { category?: string; type?: string; isPinned?: boolean; search?: string }
+) {
+    const where: any = { projectId };
+    if (filters?.category && filters.category !== "ALL") {
+        where.category = filters.category;
+    }
+    if (filters?.type) {
+        where.type = filters.type;
+    }
+    if (filters?.isPinned !== undefined) {
+        where.isPinned = filters.isPinned;
+    }
+    if (filters?.search && filters.search.trim()) {
+        const query = filters.search.trim();
+        where.OR = [
+            { title: { contains: query, mode: "insensitive" } },
+            { description: { contains: query, mode: "insensitive" } },
+            { url: { contains: query, mode: "insensitive" } },
+            { content: { contains: query, mode: "insensitive" } },
+        ];
+    }
+
+    return prisma.projectAsset.findMany({
+        where,
+        include: {
+            createdBy: {
+                select: { id: true, name: true, fullName: true, avatarUrl: true },
+            },
+        },
+        orderBy: [
+            { isPinned: "desc" },
+            { createdAt: "desc" },
+        ],
+    });
+}
+
+export async function createProjectAsset(
+    projectId: string,
+    data: {
+        title: string;
+        type?: "LINK" | "DOC";
+        category?: "CODE" | "DESIGN" | "DOCS" | "SHEET" | "DEPLOYMENT" | "MEETING" | "GENERAL";
+        url?: string;
+        content?: string;
+        description?: string;
+        isPinned?: boolean;
+    },
+    userId: string
+) {
+    if (!data.title || !data.title.trim()) {
+        throw new Error("Asset title is required.");
+    }
+
+    const type = data.type || "LINK";
+    if (type === "LINK" && !data.url) {
+        throw new Error("Asset URL is required for Link assets.");
+    }
+    if (type === "DOC" && !data.content) {
+        throw new Error("Document content is required for Doc assets.");
+    }
+
+    return prisma.projectAsset.create({
+        data: {
+            projectId,
+            title: data.title.trim(),
+            type,
+            category: data.category || "GENERAL",
+            url: data.url ? data.url.trim() : null,
+            content: data.content || null,
+            description: data.description ? data.description.trim() : null,
+            isPinned: Boolean(data.isPinned),
+            createdById: userId,
+        },
+        include: {
+            createdBy: {
+                select: { id: true, name: true, fullName: true, avatarUrl: true },
+            },
+        },
+    });
+}
+
+export async function updateProjectAsset(
+    projectId: string,
+    assetId: string,
+    data: {
+        title?: string;
+        type?: "LINK" | "DOC";
+        category?: "CODE" | "DESIGN" | "DOCS" | "SHEET" | "DEPLOYMENT" | "MEETING" | "GENERAL";
+        url?: string;
+        content?: string;
+        description?: string;
+        isPinned?: boolean;
+    },
+    userId: string,
+    isLeaderOrManager: boolean = false
+) {
+    const existing = await prisma.projectAsset.findFirst({
+        where: { id: assetId, projectId },
+    });
+
+    if (!existing) {
+        throw new Error("Asset not found.");
+    }
+
+    if (!isLeaderOrManager && existing.createdById !== userId) {
+        throw new Error("Only the asset creator or project leaders can edit this asset.");
+    }
+
+    const updateData: any = {};
+    if (data.title !== undefined) updateData.title = data.title.trim();
+    if (data.type !== undefined) updateData.type = data.type;
+    if (data.category !== undefined) updateData.category = data.category;
+    if (data.url !== undefined) updateData.url = data.url ? data.url.trim() : null;
+    if (data.content !== undefined) updateData.content = data.content;
+    if (data.description !== undefined) updateData.description = data.description ? data.description.trim() : null;
+    if (data.isPinned !== undefined) updateData.isPinned = Boolean(data.isPinned);
+
+    return prisma.projectAsset.update({
+        where: { id: assetId },
+        data: updateData,
+        include: {
+            createdBy: {
+                select: { id: true, name: true, fullName: true, avatarUrl: true },
+            },
+        },
+    });
+}
+
+export async function deleteProjectAsset(
+    projectId: string,
+    assetId: string,
+    userId: string,
+    isLeaderOrManager: boolean = false
+) {
+    const existing = await prisma.projectAsset.findFirst({
+        where: { id: assetId, projectId },
+    });
+
+    if (!existing) {
+        throw new Error("Asset not found.");
+    }
+
+    if (!isLeaderOrManager && existing.createdById !== userId) {
+        throw new Error("Only the asset creator or project leaders can delete this asset.");
+    }
+
+    return prisma.projectAsset.delete({
+        where: { id: assetId },
+    });
+}
+
+export async function togglePinAsset(
+    projectId: string,
+    assetId: string,
+    userId: string,
+    isLeaderOrManager: boolean = false
+) {
+    const existing = await prisma.projectAsset.findFirst({
+        where: { id: assetId, projectId },
+    });
+
+    if (!existing) {
+        throw new Error("Asset not found.");
+    }
+
+    if (!isLeaderOrManager && existing.createdById !== userId) {
+        throw new Error("Only the asset creator or project leaders can pin/unpin this asset.");
+    }
+
+    return prisma.projectAsset.update({
+        where: { id: assetId },
+        data: { isPinned: !existing.isPinned },
+        include: {
+            createdBy: {
+                select: { id: true, name: true, fullName: true, avatarUrl: true },
+            },
+        },
+    });
+}
+
+// ==========================================
+// PROJECT CATEGORIES (DOCS & LINKS)
+// ==========================================
+
+export async function getProjectCategories(projectId: string) {
+    return prisma.projectCategory.findMany({
+        where: { projectId },
+        include: {
+            _count: {
+                select: { docs: true, links: true },
+            },
+        },
+        orderBy: { createdAt: "asc" },
+    });
+}
+
+export async function createProjectCategory(
+    projectId: string,
+    data: { name: string; color?: string }
+) {
+    if (!data.name || !data.name.trim()) {
+        throw new Error("Category name is required.");
+    }
+
+    return prisma.projectCategory.create({
+        data: {
+            projectId,
+            name: data.name.trim(),
+            color: data.color ? data.color.trim() : null,
+        },
+        include: {
+            _count: {
+                select: { docs: true, links: true },
+            },
+        },
+    });
+}
+
+export async function updateProjectCategory(
+    projectId: string,
+    categoryId: string,
+    data: { name?: string; color?: string }
+) {
+    const existing = await prisma.projectCategory.findFirst({
+        where: { id: categoryId, projectId },
+    });
+
+    if (!existing) {
+        throw new Error("Category not found.");
+    }
+
+    const updateData: any = {};
+    if (data.name !== undefined) {
+        if (!data.name.trim()) throw new Error("Category name cannot be empty.");
+        updateData.name = data.name.trim();
+    }
+    if (data.color !== undefined) {
+        updateData.color = data.color ? data.color.trim() : null;
+    }
+
+    return prisma.projectCategory.update({
+        where: { id: categoryId },
+        data: updateData,
+        include: {
+            _count: {
+                select: { docs: true, links: true },
+            },
+        },
+    });
+}
+
+export async function deleteProjectCategory(projectId: string, categoryId: string) {
+    const existing = await prisma.projectCategory.findFirst({
+        where: { id: categoryId, projectId },
+    });
+
+    if (!existing) {
+        throw new Error("Category not found.");
+    }
+
+    // Set categoryId to null on associated docs & links first to ensure clean fallback
+    await prisma.$transaction([
+        prisma.projectDoc.updateMany({
+            where: { projectId, categoryId },
+            data: { categoryId: null },
+        }),
+        prisma.projectLink.updateMany({
+            where: { projectId, categoryId },
+            data: { categoryId: null },
+        }),
+        prisma.projectCategory.delete({
+            where: { id: categoryId },
+        }),
+    ]);
+
+    return { success: true, message: "Category deleted and child items moved to uncategorized." };
+}
+
+// ==========================================
+// PROJECT DOCUMENTS (RICH-TEXT WORKSPACE)
+// ==========================================
+
+export async function getProjectDocs(
+    projectId: string,
+    filters?: { categoryId?: string; search?: string }
+) {
+    const where: any = { projectId };
+    if (filters?.categoryId) {
+        if (filters.categoryId === "uncategorized" || filters.categoryId === "null") {
+            where.categoryId = null;
+        } else if (filters.categoryId !== "ALL") {
+            where.categoryId = filters.categoryId;
+        }
+    }
+    if (filters?.search && filters.search.trim()) {
+        const query = filters.search.trim();
+        where.OR = [
+            { title: { contains: query, mode: "insensitive" } },
+            { content: { contains: query, mode: "insensitive" } },
+        ];
+    }
+
+    return prisma.projectDoc.findMany({
+        where,
+        include: {
+            category: true,
+            createdBy: {
+                select: { id: true, name: true, fullName: true, avatarUrl: true },
+            },
+        },
+        orderBy: { updatedAt: "desc" },
+    });
+}
+
+export async function createProjectDoc(
+    projectId: string,
+    data: {
+        title: string;
+        content?: string;
+        categoryId?: string | null;
+    },
+    userId: string
+) {
+    if (!data.title || !data.title.trim()) {
+        throw new Error("Document title is required.");
+    }
+
+    let resolvedCategoryId: string | null = null;
+    if (data.categoryId && data.categoryId !== "uncategorized" && data.categoryId !== "null") {
+        const cat = await prisma.projectCategory.findFirst({
+            where: { id: data.categoryId, projectId },
+        });
+        if (cat) {
+            resolvedCategoryId = cat.id;
+        }
+    }
+
+    return prisma.projectDoc.create({
+        data: {
+            projectId,
+            title: data.title.trim(),
+            content: data.content ?? "",
+            categoryId: resolvedCategoryId,
+            createdById: userId,
+        },
+        include: {
+            category: true,
+            createdBy: {
+                select: { id: true, name: true, fullName: true, avatarUrl: true },
+            },
+        },
+    });
+}
+
+export async function updateProjectDoc(
+    projectId: string,
+    docId: string,
+    data: {
+        title?: string;
+        content?: string;
+        categoryId?: string | null;
+    },
+    userId: string,
+    isLeaderOrManager: boolean = false
+) {
+    const existing = await prisma.projectDoc.findFirst({
+        where: { id: docId, projectId },
+    });
+
+    if (!existing) {
+        throw new Error("Document not found.");
+    }
+
+    if (!isLeaderOrManager && existing.createdById !== userId) {
+        throw new Error("Only the document author or project leaders can edit this document.");
+    }
+
+    const updateData: any = {};
+    if (data.title !== undefined) {
+        if (!data.title.trim()) throw new Error("Document title cannot be empty.");
+        updateData.title = data.title.trim();
+    }
+    if (data.content !== undefined) updateData.content = data.content;
+    if (data.categoryId !== undefined) {
+        if (data.categoryId && data.categoryId !== "uncategorized" && data.categoryId !== "null") {
+            const cat = await prisma.projectCategory.findFirst({
+                where: { id: data.categoryId, projectId },
+            });
+            updateData.categoryId = cat ? cat.id : null;
+        } else {
+            updateData.categoryId = null;
+        }
+    }
+
+    return prisma.projectDoc.update({
+        where: { id: docId },
+        data: updateData,
+        include: {
+            category: true,
+            createdBy: {
+                select: { id: true, name: true, fullName: true, avatarUrl: true },
+            },
+        },
+    });
+}
+
+export async function deleteProjectDoc(
+    projectId: string,
+    docId: string,
+    userId: string,
+    isLeaderOrManager: boolean = false
+) {
+    const existing = await prisma.projectDoc.findFirst({
+        where: { id: docId, projectId },
+    });
+
+    if (!existing) {
+        throw new Error("Document not found.");
+    }
+
+    if (!isLeaderOrManager && existing.createdById !== userId) {
+        throw new Error("Only the document author or project leaders can delete this document.");
+    }
+
+    return prisma.projectDoc.delete({
+        where: { id: docId },
+    });
+}
+
+// ==========================================
+// PROJECT LINKS & RESOURCES
+// ==========================================
+
+export async function getProjectLinks(
+    projectId: string,
+    filters?: { categoryId?: string; search?: string }
+) {
+    const where: any = { projectId };
+    if (filters?.categoryId) {
+        if (filters.categoryId === "uncategorized" || filters.categoryId === "null") {
+            where.categoryId = null;
+        } else if (filters.categoryId !== "ALL") {
+            where.categoryId = filters.categoryId;
+        }
+    }
+    if (filters?.search && filters.search.trim()) {
+        const query = filters.search.trim();
+        where.OR = [
+            { title: { contains: query, mode: "insensitive" } },
+            { url: { contains: query, mode: "insensitive" } },
+            { description: { contains: query, mode: "insensitive" } },
+        ];
+    }
+
+    return prisma.projectLink.findMany({
+        where,
+        include: {
+            category: true,
+            createdBy: {
+                select: { id: true, name: true, fullName: true, avatarUrl: true },
+            },
+        },
+        orderBy: { createdAt: "desc" },
+    });
+}
+
+export async function createProjectLink(
+    projectId: string,
+    data: {
+        title: string;
+        url: string;
+        description?: string;
+        categoryId?: string | null;
+    },
+    userId: string
+) {
+    if (!data.title || !data.title.trim()) {
+        throw new Error("Link title is required.");
+    }
+    if (!data.url || !data.url.trim()) {
+        throw new Error("Link URL is required.");
+    }
+
+    let resolvedCategoryId: string | null = null;
+    if (data.categoryId && data.categoryId !== "uncategorized" && data.categoryId !== "null") {
+        const cat = await prisma.projectCategory.findFirst({
+            where: { id: data.categoryId, projectId },
+        });
+        if (cat) {
+            resolvedCategoryId = cat.id;
+        }
+    }
+
+    return prisma.projectLink.create({
+        data: {
+            projectId,
+            title: data.title.trim(),
+            url: data.url.trim(),
+            description: data.description ? data.description.trim() : null,
+            categoryId: resolvedCategoryId,
+            createdById: userId,
+        },
+        include: {
+            category: true,
+            createdBy: {
+                select: { id: true, name: true, fullName: true, avatarUrl: true },
+            },
+        },
+    });
+}
+
+export async function updateProjectLink(
+    projectId: string,
+    linkId: string,
+    data: {
+        title?: string;
+        url?: string;
+        description?: string;
+        categoryId?: string | null;
+    },
+    userId: string,
+    isLeaderOrManager: boolean = false
+) {
+    const existing = await prisma.projectLink.findFirst({
+        where: { id: linkId, projectId },
+    });
+
+    if (!existing) {
+        throw new Error("Link not found.");
+    }
+
+    if (!isLeaderOrManager && existing.createdById !== userId) {
+        throw new Error("Only the link creator or project leaders can edit this link.");
+    }
+
+    const updateData: any = {};
+    if (data.title !== undefined) {
+        if (!data.title.trim()) throw new Error("Link title cannot be empty.");
+        updateData.title = data.title.trim();
+    }
+    if (data.url !== undefined) {
+        if (!data.url.trim()) throw new Error("Link URL cannot be empty.");
+        updateData.url = data.url.trim();
+    }
+    if (data.description !== undefined) {
+        updateData.description = data.description ? data.description.trim() : null;
+    }
+    if (data.categoryId !== undefined) {
+        if (data.categoryId && data.categoryId !== "uncategorized" && data.categoryId !== "null") {
+            const cat = await prisma.projectCategory.findFirst({
+                where: { id: data.categoryId, projectId },
+            });
+            updateData.categoryId = cat ? cat.id : null;
+        } else {
+            updateData.categoryId = null;
+        }
+    }
+
+    return prisma.projectLink.update({
+        where: { id: linkId },
+        data: updateData,
+        include: {
+            category: true,
+            createdBy: {
+                select: { id: true, name: true, fullName: true, avatarUrl: true },
+            },
+        },
+    });
+}
+
+export async function deleteProjectLink(
+    projectId: string,
+    linkId: string,
+    userId: string,
+    isLeaderOrManager: boolean = false
+) {
+    const existing = await prisma.projectLink.findFirst({
+        where: { id: linkId, projectId },
+    });
+
+    if (!existing) {
+        throw new Error("Link not found.");
+    }
+
+    if (!isLeaderOrManager && existing.createdById !== userId) {
+        throw new Error("Only the link creator or project leaders can delete this link.");
+    }
+
+    return prisma.projectLink.delete({
+        where: { id: linkId },
+    });
+}
+
