@@ -1,6 +1,7 @@
 import { prisma, Role } from "../../config/prisma";
 import { processAvatarUpload, deleteFromCloudinary } from "../../cloudinary";
 import { createNotification } from "../notifications/notifications.service";
+import { getIO } from "../../config/socket";
 
 export const getUsersExcludeTeam = async (teamId: string) => {
     return prisma.user.findMany({
@@ -225,6 +226,14 @@ export const removeMember = async (
         });
     }
 
+    const io = getIO();
+    if (io) {
+        io.to(`user:${userId}`).emit("team_membership_updated", {
+            teamId,
+            action: "removed",
+        });
+    }
+
     return memberTasks.length;
 };
 
@@ -246,7 +255,17 @@ export const addMember = async (
         userId,
         content: `You have been added to team workspace "${membership.team.name}" as a ${membership.role}.`,
         type: "MEMBER_ADDED",
+        teamId,
     });
+
+    const io = getIO();
+    if (io) {
+        io.to(`user:${userId}`).emit("team_membership_updated", {
+            teamId,
+            action: "added",
+            teamName: membership.team.name,
+        });
+    }
 
     return membership;
 };
@@ -290,7 +309,17 @@ export const inviteByEmail = async (
         userId: targetUser.id,
         content: `You have been invited and added to workspace "${membership.team.name}" as a ${membership.role}.`,
         type: "MEMBER_INVITED",
+        teamId,
     });
+
+    const io = getIO();
+    if (io) {
+        io.to(`user:${targetUser.id}`).emit("team_membership_updated", {
+            teamId,
+            action: "added",
+            teamName: membership.team.name,
+        });
+    }
 
     return { membership, user: targetUser };
 };
@@ -470,7 +499,17 @@ export const updateMemberRole = async (
         userId,
         content: `Your role in team workspace "${membership.team.name}" has been updated to ${membership.role}.`,
         type: "ROLE_UPDATED",
+        teamId,
     });
+
+    const io = getIO();
+    if (io) {
+        io.to(`user:${userId}`).emit("team_membership_updated", {
+            teamId,
+            action: "role_updated",
+            role: membership.role,
+        });
+    }
 
     return membership;
 };

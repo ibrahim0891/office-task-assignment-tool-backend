@@ -87,7 +87,8 @@ export const getNotificationsByUserId = async (userId: string, teamId: string, p
             userId,
             OR: [
                 { teamId },
-                { teamId: null }
+                { teamId: null },
+                { type: { in: ["MEMBER_ADDED", "MEMBER_INVITED", "ROLE_UPDATED", "PROJECT_INVITATION"] } },
             ]
         },
         orderBy: { createdAt: "desc" },
