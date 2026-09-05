@@ -234,6 +234,14 @@ export const removeMember = async (
             action: "removed",
         });
     }
+
+    const io = getIO();
+    if (io) {
+        io.to(`user:${userId}`).emit("team_membership_updated", {
+            teamId,
+            action: "removed",
+        });
+    }
     invalidateRoleCache(userId, teamId);
     return memberTasks.length;
 };
