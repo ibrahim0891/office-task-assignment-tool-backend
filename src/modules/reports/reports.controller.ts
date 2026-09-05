@@ -4,7 +4,8 @@ import { getLocalDateString } from "../../utils/date";
 import * as reportsService from "./reports.service";
 
 export const getReport = async (req: Request, res: Response) => {
-    const { teamId, startDate, endDate, daysFromToday } = req.query;
+    const { teamId, startDate, endDate, daysFromToday, memberId } = req.query;
+    const clientToday = req.headers["x-client-today"] as string || (req.query.clientToday as string);
 
     if (!teamId) {
         return sendResponse(res, 400, { error: "teamId is required." });
@@ -15,7 +16,9 @@ export const getReport = async (req: Request, res: Response) => {
             teamId as string,
             daysFromToday as string,
             startDate as string,
-            endDate as string
+            endDate as string,
+            memberId as string,
+            clientToday
         );
         sendResponse(res, 200, report);
     } catch (error: any) {
@@ -24,7 +27,8 @@ export const getReport = async (req: Request, res: Response) => {
 };
 
 export const exportCsv = async (req: Request, res: Response) => {
-    const { teamId, startDate, endDate, daysFromToday } = req.query;
+    const { teamId, startDate, endDate, daysFromToday, memberId } = req.query;
+    const clientToday = req.headers["x-client-today"] as string || (req.query.clientToday as string);
 
     if (!teamId) {
         return sendResponse(res, 400, { error: "teamId is required." });
@@ -35,7 +39,9 @@ export const exportCsv = async (req: Request, res: Response) => {
             teamId as string,
             daysFromToday as string,
             startDate as string,
-            endDate as string
+            endDate as string,
+            memberId as string,
+            clientToday
         );
 
         res.setHeader("Content-Type", "text/csv");
@@ -48,3 +54,4 @@ export const exportCsv = async (req: Request, res: Response) => {
         sendResponse(res, 500, { error: error.message });
     }
 };
+
