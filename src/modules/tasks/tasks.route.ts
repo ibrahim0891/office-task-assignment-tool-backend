@@ -14,6 +14,7 @@ router.get("/tasks/:taskId", resolveWorkspaceContext, tasksController.getTask);
 router.post("/tasks", resolveWorkspaceContext, tasksController.createTask);
 router.put("/tasks/:taskId", requireTaskOwnerOrLeaderOrAssignee, tasksController.updateTask);
 router.delete("/tasks/:taskId", requireTaskOwnerOrLeaderOrAssignee, tasksController.softDeleteTask);
+router.delete("/tasks/:taskId/permanent", requireTaskOwnerOrLeaderOrAssignee, tasksController.permanentDeleteTask);
 router.post("/tasks/:taskId/restore", requireTaskOwnerOrLeaderOrAssignee, tasksController.restoreTask);
 router.post("/tasks/:taskId/checklist", requireTaskOwnerOrLeaderOrAssignee, tasksController.createChecklistItem);
 router.put("/tasks/:taskId/checklist/:itemId", requireTaskOwnerOrLeaderOrAssignee, tasksController.updateChecklistItem);

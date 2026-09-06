@@ -128,9 +128,20 @@ export const restoreTask = async (req: Request, res: Response) => {
 
 export const permanentDeleteTask = async (req: Request, res: Response) => {
     const { taskId } = req.params;
+    const actingUserId = (req.headers["x-user-id"] as string) || (req as any).user?.userId;
 
     try {
+        const workspaceTeamId = (req as any).workspaceTeamId;
         await tasksService.permanentDeleteTaskItem(taskId);
+        if (workspaceTeamId) {
+            notifyTeam(workspaceTeamId, "task_updated", {
+                action: "delete",
+                taskId,
+                actingUserId,
+                clientId: req.body?.clientId,
+                timestamp: Date.now(),
+            });
+        }
         sendResponse(res, 200, { message: "Task permanently deleted." });
     } catch (error: any) {
         sendResponse(res, 500, { error: error.message });
