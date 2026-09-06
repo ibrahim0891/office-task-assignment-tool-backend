@@ -1,7 +1,7 @@
 import { prisma } from "../../config/prisma";
 import { deleteFromCloudinary, uploadImageAttachment } from "../../cloudinary";
 import { parseLocalDate, getLocalDateString } from "../../utils/date";
-import { runCarryForwardAndRecurring } from "./taskEngine";
+import { runCarryForwardAndRecurring, resetCarryForwardDailyLock } from "./taskEngine";
 import { APP_CONFIG } from "../../config/appConfig";
 import { createNotification, notifyTeamLeader } from "../notifications/notifications.service";
 
@@ -155,6 +155,15 @@ export const createTaskItem = async (body: any, isMember: boolean) => {
             ? clientToday
             : getLocalDateString(new Date()));
     const taskDate = parseLocalDate(dateStr);
+
+    let finalDueDate: Date | null = null;
+    if (dueDate) {
+        const dueStr = typeof dueDate === "string" ? dueDate.split("T")[0] : getLocalDateString(new Date(dueDate));
+        finalDueDate = parseLocalDate(dueStr);
+        if (finalDueDate.getTime() < taskDate.getTime()) {
+            throw new Error("Due date cannot be earlier than start date.");
+        }
+    }
     const finalAssignedToId = assignedToId || createdById;
 
     const task = await prisma.task.create({
@@ -164,7 +173,7 @@ export const createTaskItem = async (body: any, isMember: boolean) => {
             description,
             columnId,
             priority: priority || "MEDIUM",
-            dueDate: dueDate ? new Date(dueDate) : null,
+            dueDate: finalDueDate,
             date: taskDate,
             originalDate: taskDate,
             estimatedTime: estimatedTime ? parseFloat(estimatedTime) : null,
@@ -227,6 +236,7 @@ export const updateTaskItem = async (taskId: string, body: any, actingUserId: st
         description,
         columnId,
         priority,
+        date,
         dueDate,
         estimatedTime,
         actualTime,
@@ -246,6 +256,41 @@ export const updateTaskItem = async (taskId: string, body: any, actingUserId: st
 
     const updateData: any = {};
     const detailsChanges: any = {};
+
+    let targetDate: Date = task.date;
+    if (date !== undefined && date !== null && date !== "") {
+        const dateStr = typeof date === "string" ? date.split("T")[0] : getLocalDateString(new Date(date));
+        targetDate = parseLocalDate(dateStr);
+    }
+
+    let targetDueDate: Date | null = task.dueDate;
+    if (dueDate !== undefined) {
+        if (dueDate === null || dueDate === "") {
+            targetDueDate = null;
+        } else {
+            const dueStr = typeof dueDate === "string" ? dueDate.split("T")[0] : getLocalDateString(new Date(dueDate));
+            targetDueDate = parseLocalDate(dueStr);
+        }
+    }
+
+    if (targetDate && targetDueDate && targetDueDate.getTime() < targetDate.getTime()) {
+        throw new Error("Due date cannot be earlier than start date.");
+    }
+
+    if (date !== undefined && date !== null && date !== "") {
+        const targetDateStr = typeof date === "string" ? date.split("T")[0] : getLocalDateString(new Date(date));
+        const oldDateStr = task.date ? getLocalDateString(task.date) : null;
+        if (targetDateStr !== oldDateStr) {
+            updateData.date = targetDate;
+            updateData.originalDate = targetDate;
+            updateData.carryCount = 0;
+            detailsChanges.date = {
+                from: oldDateStr || "None",
+                to: targetDateStr,
+            };
+            resetCarryForwardDailyLock(task.teamId);
+        }
+    }
 
     if (title !== undefined && title !== task.title) {
         if (actingUserId !== task.createdById) {
@@ -274,12 +319,15 @@ export const updateTaskItem = async (taskId: string, body: any, actingUserId: st
         detailsChanges.priority = { from: task.priority, to: priority };
     }
     if (dueDate !== undefined) {
-        const newDue = dueDate ? new Date(dueDate) : null;
-        updateData.dueDate = newDue;
-        detailsChanges.dueDate = {
-            from: task.dueDate ? new Date(task.dueDate).toLocaleDateString() : "None",
-            to: newDue ? newDue.toLocaleDateString() : "None",
-        };
+        const oldDueStr = task.dueDate ? getLocalDateString(task.dueDate) : null;
+        const newDueStr = targetDueDate ? getLocalDateString(targetDueDate) : null;
+        if (newDueStr !== oldDueStr) {
+            updateData.dueDate = targetDueDate;
+            detailsChanges.dueDate = {
+                from: oldDueStr || "None",
+                to: newDueStr || "None",
+            };
+        }
     }
     if (estimatedTime !== undefined && estimatedTime !== task.estimatedTime) {
         const parsedEst = estimatedTime ? Math.max(0, parseFloat(estimatedTime)) : null;

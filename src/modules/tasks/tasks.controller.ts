@@ -45,6 +45,9 @@ export const createTask = async (req: Request, res: Response) => {
         if (error.message.includes("Standard members can only assign tasks")) {
             return sendResponse(res, 403, { error: error.message });
         }
+        if (error.message.includes("Due date cannot be earlier") || error.message.includes("Task title")) {
+            return sendResponse(res, 400, { error: error.message });
+        }
         sendResponse(res, 500, { error: error.message });
     }
 };
@@ -72,6 +75,9 @@ export const updateTask = async (req: Request, res: Response) => {
         }
         if (error.message.includes("Only the task creator") || error.message.includes("assign tasks to themselves")) {
             return sendResponse(res, 403, { error: error.message });
+        }
+        if (error.message.includes("Due date cannot be earlier") || error.message.includes("Task title")) {
+            return sendResponse(res, 400, { error: error.message });
         }
         sendResponse(res, 500, { error: error.message });
     }
