@@ -1045,8 +1045,24 @@ export async function createProjectSubtask(taskId: string, data: any, actingUser
         throw new Error("Subtask assignee is required.");
     }
 
-    const startDate = data.startDate ? new Date(data.startDate) : (parentTask.startDate || new Date());
-    const dueDate = data.dueDate ? new Date(data.dueDate) : (parentTask.dueDate || new Date());
+    const rawStart = data.startDate !== undefined ? data.startDate : undefined;
+    const rawDue = data.dueDate !== undefined ? data.dueDate : (data.endDate !== undefined ? data.endDate : undefined);
+
+    let startDate = rawStart ? new Date(rawStart) : (parentTask.startDate || new Date());
+    if (isNaN(startDate.getTime())) {
+        startDate = parentTask.startDate || new Date();
+    }
+
+    let dueDate = rawDue ? new Date(rawDue) : (parentTask.dueDate || new Date());
+    if (isNaN(dueDate.getTime())) {
+        dueDate = parentTask.dueDate || new Date();
+    }
+
+    const sStr = new Date(startDate).toISOString().split("T")[0];
+    const dStr = new Date(dueDate).toISOString().split("T")[0];
+    if (sStr > dStr) {
+        throw new Error(`Subtask start date (${sStr}) cannot be later than due date (${dStr}).`);
+    }
 
     let targetColumnId = data.columnId;
     if (!targetColumnId) {
@@ -1065,6 +1081,17 @@ export async function createProjectSubtask(taskId: string, data: any, actingUser
         }
     }
 
+    let calculatedEstimatedDays = 1.0;
+    if (data.estimatedDays !== undefined && !isNaN(Number(data.estimatedDays))) {
+        calculatedEstimatedDays = Number(data.estimatedDays);
+    } else {
+        const startMs = new Date(startDate).getTime();
+        const dueMs = new Date(dueDate).getTime();
+        if (!isNaN(startMs) && !isNaN(dueMs) && dueMs >= startMs) {
+            calculatedEstimatedDays = Math.max(1, Math.round((dueMs - startMs) / (1000 * 60 * 60 * 24)) + 1);
+        }
+    }
+
     const createdSubtask = await prisma.projectSubtask.create({
         data: {
             parentTaskId: taskId,
@@ -1075,7 +1102,7 @@ export async function createProjectSubtask(taskId: string, data: any, actingUser
             assignedToId: targetAssigneeId,
             startDate,
             dueDate,
-            estimatedDays: data.estimatedDays ? Number(data.estimatedDays) : 1.0,
+            estimatedDays: calculatedEstimatedDays,
             actualDays: data.actualDays ? Number(data.actualDays) : 0,
             isCompleted,
             reviewerId: data.reviewerId || null,
@@ -1144,9 +1171,45 @@ export async function updateProjectSubtask(subtaskId: string, data: any, actingU
         }
     }
     if (data.isCompleted !== undefined) updateData.isCompleted = Boolean(data.isCompleted);
-    if (data.startDate !== undefined) updateData.startDate = new Date(data.startDate);
-    if (data.dueDate !== undefined) updateData.dueDate = new Date(data.dueDate);
-    if (data.estimatedDays !== undefined) updateData.estimatedDays = Number(data.estimatedDays);
+
+    const rawStart = data.startDate !== undefined ? data.startDate : undefined;
+    const rawDue = data.dueDate !== undefined ? data.dueDate : (data.endDate !== undefined ? data.endDate : undefined);
+
+    if (rawStart !== undefined && rawStart !== null && rawStart !== "") {
+        const parsedStart = new Date(rawStart);
+        if (!isNaN(parsedStart.getTime())) {
+            updateData.startDate = parsedStart;
+        }
+    }
+
+    if (rawDue !== undefined && rawDue !== null && rawDue !== "") {
+        const parsedDue = new Date(rawDue);
+        if (!isNaN(parsedDue.getTime())) {
+            updateData.dueDate = parsedDue;
+        }
+    }
+
+    const effectiveStart = updateData.startDate || existingSubtask.startDate;
+    const effectiveDue = updateData.dueDate || existingSubtask.dueDate;
+
+    if (effectiveStart && effectiveDue) {
+        const sStr = new Date(effectiveStart).toISOString().split("T")[0];
+        const dStr = new Date(effectiveDue).toISOString().split("T")[0];
+        if (sStr > dStr) {
+            throw new Error(`Subtask start date (${sStr}) cannot be later than due date (${dStr}).`);
+        }
+    }
+
+    if (data.estimatedDays !== undefined && !isNaN(Number(data.estimatedDays))) {
+        updateData.estimatedDays = Number(data.estimatedDays);
+    } else if (updateData.startDate || updateData.dueDate) {
+        const startMs = new Date(effectiveStart).getTime();
+        const dueMs = new Date(effectiveDue).getTime();
+        if (!isNaN(startMs) && !isNaN(dueMs) && dueMs >= startMs) {
+            updateData.estimatedDays = Math.max(1, Math.round((dueMs - startMs) / (1000 * 60 * 60 * 24)) + 1);
+        }
+    }
+
     if (data.actualDays !== undefined) updateData.actualDays = Number(data.actualDays);
 
     return await prisma.projectSubtask.update({
