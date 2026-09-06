@@ -183,7 +183,9 @@ export async function runCarryForwardAndRecurring(teamId: string, dateStr: strin
             isSoftDeleted: false,
         },
         include: {
-            checklist: true,
+            checklist: {
+                orderBy: { createdAt: "asc" },
+            },
         },
     });
 

@@ -108,7 +108,9 @@ export const getTasksList = async (query: any, actingUserId?: string, userRole?:
             assignedTo: {
                 select: { id: true, fullName: true, avatarUrl: true }
             },
-            checklist: true,
+            checklist: {
+                orderBy: { createdAt: "asc" },
+            },
             _count: {
                 select: { comments: true, attachments: true },
             },
@@ -180,7 +182,9 @@ export const createTaskItem = async (body: any, isMember: boolean) => {
             assignedTo: {
                 select: { id: true, fullName: true, avatarUrl: true }
             },
-            checklist: true,
+            checklist: {
+                orderBy: { createdAt: "asc" },
+            },
             _count: {
                 select: { comments: true, attachments: true },
             },
@@ -341,7 +345,9 @@ export const updateTaskItem = async (taskId: string, body: any, actingUserId: st
             assignedTo: {
                 select: { id: true, fullName: true, avatarUrl: true }
             },
-            checklist: true,
+            checklist: {
+                orderBy: { createdAt: "asc" },
+            },
             _count: {
                 select: { comments: true, attachments: true },
             },
