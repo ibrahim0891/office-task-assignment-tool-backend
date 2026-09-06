@@ -1,3 +1,4 @@
+import { invalidateRoleCache } from "../../middleware/auth";
 import { prisma, Role } from "../../config/prisma";
 import { processAvatarUpload, deleteFromCloudinary } from "../../cloudinary";
 import { createNotification } from "../notifications/notifications.service";
@@ -233,7 +234,7 @@ export const removeMember = async (
             action: "removed",
         });
     }
-
+    invalidateRoleCache(userId, teamId);
     return memberTasks.length;
 };
 
@@ -414,9 +415,25 @@ export const updateTeam = async (
     teamId: string,
     name: string,
     emoji?: string,
+    actingUserId?: string,
 ) => {
     if (!name || !name.trim()) {
         throw new Error("Team name is required.");
+    }
+
+    if (actingUserId) {
+        const team = await prisma.team.findUnique({
+            where: { id: teamId },
+            include: { members: true },
+        });
+        if (!team) throw new Error("Workspace not found.");
+
+        const isLeader = team.members.some(
+            (m) => m.userId === actingUserId && m.role === Role.LEADER
+        );
+        if (!isLeader) {
+            throw new Error("Access denied. Only the workspace leader can rename or edit this workspace.");
+        }
     }
 
     const updateData: any = { name: name.trim() };
@@ -452,6 +469,19 @@ export const deleteTeamCascading = async (
 
     if (!user || user.password !== passwordString) {
         throw new Error("Incorrect password. Workspace deletion aborted.");
+    }
+
+    const team = await prisma.team.findUnique({
+        where: { id: teamId },
+        include: { members: true },
+    });
+    if (!team) throw new Error("Workspace not found.");
+
+    const isLeader = team.members.some(
+        (m) => m.userId === actingUserId && m.role === Role.LEADER
+    );
+    if (!isLeader) {
+        throw new Error("Access denied. Only the workspace leader can delete this workspace.");
     }
 
     const attachments = await prisma.attachment.findMany({

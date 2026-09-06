@@ -1,6 +1,6 @@
 import { Router } from "express";
 import * as usersController from "./users.controller";
-import { resolveWorkspaceContext, requireLeader } from "../../middleware/auth";
+import { resolveWorkspaceContext, requireLeader, requireLeaderOrSelf } from "../../middleware/auth";
 
 const router = Router();
 
@@ -16,7 +16,7 @@ router.get("/teams", usersController.getTeams);
 
 router.post(
     "/teams/:teamId/members/remove",
-    requireLeader,
+    requireLeaderOrSelf,
     usersController.removeMember,
 );
 router.post(

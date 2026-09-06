@@ -57,7 +57,7 @@ export const updateProfile = async (req: Request, res: Response) => {
 
 export const getTeams = async (req: Request, res: Response) => {
     const userId =
-        (req.query.userId as string) || (req.headers["x-user-id"] as string);
+        (req.query.userId as string) || (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
     try {
         const teams = await usersService.getUserTeams(userId);
         sendResponse(res, 200, teams);
@@ -144,13 +144,17 @@ export const createTeam = async (req: Request, res: Response) => {
 export const updateTeamName = async (req: Request, res: Response) => {
     const { teamId } = req.params;
     const { name, emoji } = req.body;
+    const actingUserId = (req as any).user?.userId || (req.headers["x-user-id"] as string);
 
     try {
-        const updatedTeam = await usersService.updateTeam(teamId, name, emoji);
+        const updatedTeam = await usersService.updateTeam(teamId, name, emoji, actingUserId);
         sendResponse(res, 200, updatedTeam);
     } catch (error: any) {
         if (error.message === "Team name is required.") {
             return sendResponse(res, 400, { error: error.message });
+        }
+        if (error.message && error.message.includes("Access denied")) {
+            return sendResponse(res, 403, { error: error.message });
         }
         sendResponse(res, 500, {
             error: error.message || "Failed to update workspace name",

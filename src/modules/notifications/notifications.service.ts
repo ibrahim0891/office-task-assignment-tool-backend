@@ -29,12 +29,29 @@ export const createNotification = async (data: {
     }
 
     // Trigger Chrome Web Push Notification in background
-    const url = data.taskId ? `/task-board?task=${data.taskId}` : "/task-board";
+    let url = "/task-board";
+    if (data.taskId) {
+        if (data.taskId.startsWith("project:")) {
+            const parts = data.taskId.split(":");
+            const pId = parts[1];
+            const tId = parts[3];
+            const sId = parts[5];
+            if (pId && tId) {
+                url = `/projects/${pId}/tasks/${tId}${sId ? `?subtaskId=${sId}&tab=comments` : `?tab=comments`}`;
+            } else if (pId) {
+                url = `/projects/${pId}`;
+            }
+        } else {
+            url = `/task-board?task=${data.taskId}`;
+        }
+    }
     let title = "🔔 Workspace Update";
     if (data.type === "NEED_ATTENTION") {
         title = "⚠️ Action Needed";
-    } else if (data.type === "COMMENT_MENTION") {
-        title = "💬 New Mention";
+    } else if (data.type === "COMMENT_MENTION" || data.type.includes("COMMENT")) {
+        title = "💬 New Comment";
+    } else if (data.type.includes("ASSIGNED")) {
+        title = "📋 New Assignment";
     }
     
     sendPushNotification(data.userId, title, data.content, url).catch((err) => {
