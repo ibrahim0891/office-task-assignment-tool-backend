@@ -397,6 +397,10 @@ export async function createProject(
         throw new Error("teamId, title, startDate, and endDate are required.");
     }
 
+    if (new Date(startDate) > new Date(endDate)) {
+        throw new Error("Project start date cannot be later than end date.");
+    }
+
     return await prisma.$transaction(async (tx) => {
         let targetFolderId = folderId;
         if (!targetFolderId) {
@@ -456,6 +460,17 @@ export async function createProject(
  * Updates project settings
  */
 export async function updateProject(projectId: string, data: any) {
+    if (data.startDate !== undefined || data.endDate !== undefined) {
+        const existing = await prisma.project.findUnique({ where: { id: projectId } });
+        if (existing) {
+            const finalStart = data.startDate !== undefined ? new Date(data.startDate) : existing.startDate;
+            const finalEnd = data.endDate !== undefined ? new Date(data.endDate) : existing.endDate;
+            if (finalStart && finalEnd && finalStart > finalEnd) {
+                throw new Error("Project start date cannot be later than end date.");
+            }
+        }
+    }
+
     const updateData: any = {};
     if (data.title !== undefined) updateData.title = data.title;
     if (data.description !== undefined) updateData.description = data.description;
@@ -800,13 +815,13 @@ export async function createProjectTask(projectId: string, data: any, createdByI
     const sDate = startDate ? new Date(startDate) : new Date(project.startDate || Date.now());
     const dDate = dueDate ? new Date(dueDate) : new Date(project.endDate || (Date.now() + 7 * 24 * 60 * 60 * 1000));
 
+    const taskStartStr = new Date(sDate).toISOString().split("T")[0];
+    const taskDueStr = new Date(dDate).toISOString().split("T")[0];
+
     // Validate task start and due dates against project timeline bounds
     if (project.startDate && project.endDate) {
         const pStartStr = new Date(project.startDate).toISOString().split("T")[0];
         const pEndStr = new Date(project.endDate).toISOString().split("T")[0];
-
-        const taskStartStr = new Date(sDate).toISOString().split("T")[0];
-        const taskDueStr = new Date(dDate).toISOString().split("T")[0];
 
         if (taskStartStr < pStartStr) {
             throw new Error(`Task start date (${taskStartStr}) cannot be earlier than project start date (${pStartStr}).`);
@@ -820,9 +835,9 @@ export async function createProjectTask(projectId: string, data: any, createdByI
         if (taskDueStr > pEndStr) {
             throw new Error(`Task due date (${taskDueStr}) cannot be later than project end date (${pEndStr}).`);
         }
-        if (taskStartStr > taskDueStr) {
-            throw new Error("Task start date cannot be later than task due date.");
-        }
+    }
+    if (taskStartStr > taskDueStr) {
+        throw new Error("Task start date cannot be later than task due date.");
     }
 
     const task = await prisma.projectTask.create({
@@ -895,12 +910,12 @@ export async function updateProjectTask(taskId: string, data: any) {
         const newStart = data.startDate !== undefined ? new Date(data.startDate) : existingTask.startDate;
         const newDue = data.dueDate !== undefined ? new Date(data.dueDate) : existingTask.dueDate;
 
+        const taskStartStr = new Date(newStart).toISOString().split("T")[0];
+        const taskDueStr = new Date(newDue).toISOString().split("T")[0];
+
         if (existingTask.project.startDate && existingTask.project.endDate) {
             const pStartStr = new Date(existingTask.project.startDate).toISOString().split("T")[0];
             const pEndStr = new Date(existingTask.project.endDate).toISOString().split("T")[0];
-
-            const taskStartStr = new Date(newStart).toISOString().split("T")[0];
-            const taskDueStr = new Date(newDue).toISOString().split("T")[0];
 
             if (taskStartStr < pStartStr) {
                 throw new Error(`Task start date (${taskStartStr}) cannot be earlier than project start date (${pStartStr}).`);
@@ -914,9 +929,9 @@ export async function updateProjectTask(taskId: string, data: any) {
             if (taskDueStr > pEndStr) {
                 throw new Error(`Task due date (${taskDueStr}) cannot be later than project end date (${pEndStr}).`);
             }
-            if (taskStartStr > taskDueStr) {
-                throw new Error("Task start date cannot be later than task due date.");
-            }
+        }
+        if (taskStartStr > taskDueStr) {
+            throw new Error("Task start date cannot be later than task due date.");
         }
     }
 
@@ -1210,7 +1225,17 @@ export async function updateProjectSubtask(subtaskId: string, data: any, actingU
         }
     }
 
-    if (data.actualDays !== undefined) updateData.actualDays = Number(data.actualDays);
+    if (data.actualDays !== undefined) {
+        updateData.actualDays = Number(data.actualDays);
+    } else if (updateData.isCompleted === true) {
+        const startMs = new Date(effectiveStart).getTime();
+        const doneMs = new Date().getTime();
+        if (!isNaN(startMs)) {
+            updateData.actualDays = Math.max(1, Math.round((doneMs - startMs) / (1000 * 60 * 60 * 24)) + 1);
+        }
+    } else if (updateData.isCompleted === false && !existingSubtask.isCompleted) {
+        updateData.actualDays = 0;
+    }
 
     return await prisma.projectSubtask.update({
         where: { id: subtaskId },
