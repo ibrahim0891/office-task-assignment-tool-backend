@@ -145,10 +145,10 @@ export const createChecklistItem = async (req: Request, res: Response) => {
 
 export const updateChecklistItem = async (req: Request, res: Response) => {
     const { itemId } = req.params;
-    const { isCompleted } = req.body;
+    const { isCompleted, title } = req.body;
 
     try {
-        const item = await tasksService.updateChecklist(itemId, isCompleted);
+        const item = await tasksService.updateChecklist(itemId, { isCompleted, title });
         sendResponse(res, 200, item);
     } catch (error: any) {
         sendResponse(res, 500, { error: error.message });

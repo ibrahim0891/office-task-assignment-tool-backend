@@ -523,10 +523,23 @@ export const createChecklist = async (taskId: string, title: string) => {
     });
 };
 
-export const updateChecklist = async (itemId: string, isCompleted: boolean) => {
+export const updateChecklist = async (
+    itemId: string,
+    data: boolean | { isCompleted?: boolean; title?: string }
+) => {
+    if (typeof data === "boolean") {
+        return prisma.checklistItem.update({
+            where: { id: itemId },
+            data: { isCompleted: data },
+        });
+    }
+    const updateData: any = {};
+    if (data.isCompleted !== undefined) updateData.isCompleted = Boolean(data.isCompleted);
+    if (data.title !== undefined) updateData.title = String(data.title).trim();
+
     return prisma.checklistItem.update({
         where: { id: itemId },
-        data: { isCompleted },
+        data: updateData,
     });
 };
 
