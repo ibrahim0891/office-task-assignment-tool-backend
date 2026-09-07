@@ -1079,6 +1079,16 @@ export async function createProjectSubtask(taskId: string, data: any, actingUser
         throw new Error(`Subtask start date (${sStr}) cannot be later than due date (${dStr}).`);
     }
 
+    const projectStartDate = parentTask.project?.startDate ? new Date(parentTask.project.startDate).toISOString().split("T")[0] : null;
+    const projectEndDate = parentTask.project?.endDate ? new Date(parentTask.project.endDate).toISOString().split("T")[0] : null;
+
+    if (projectEndDate && dStr > projectEndDate) {
+        throw new Error(`Subtask due date (${dStr}) cannot exceed project end date (${projectEndDate}).`);
+    }
+    if (projectStartDate && sStr < projectStartDate) {
+        throw new Error(`Subtask start date (${sStr}) cannot precede project start date (${projectStartDate}).`);
+    }
+
     let targetColumnId = data.columnId;
     if (!targetColumnId) {
         const firstCol = await prisma.projectColumn.findFirst({
@@ -1212,6 +1222,16 @@ export async function updateProjectSubtask(subtaskId: string, data: any, actingU
         const dStr = new Date(effectiveDue).toISOString().split("T")[0];
         if (sStr > dStr) {
             throw new Error(`Subtask start date (${sStr}) cannot be later than due date (${dStr}).`);
+        }
+
+        const projectStartDate = existingSubtask.parentTask?.project?.startDate ? new Date(existingSubtask.parentTask.project.startDate).toISOString().split("T")[0] : null;
+        const projectEndDate = existingSubtask.parentTask?.project?.endDate ? new Date(existingSubtask.parentTask.project.endDate).toISOString().split("T")[0] : null;
+
+        if (projectEndDate && dStr > projectEndDate) {
+            throw new Error(`Subtask due date (${dStr}) cannot exceed project end date (${projectEndDate}).`);
+        }
+        if (projectStartDate && sStr < projectStartDate) {
+            throw new Error(`Subtask start date (${sStr}) cannot precede project start date (${projectStartDate}).`);
         }
     }
 
