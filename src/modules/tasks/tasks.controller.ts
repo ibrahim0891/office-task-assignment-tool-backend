@@ -151,9 +151,19 @@ export const permanentDeleteTask = async (req: Request, res: Response) => {
 export const createChecklistItem = async (req: Request, res: Response) => {
     const { taskId } = req.params;
     const { title } = req.body;
+    const actingUserId = (req.headers["x-user-id"] as string) || (req as any).user?.userId;
 
     try {
         const item = await tasksService.createChecklist(taskId, title);
+        const task = await prisma.task.findUnique({ where: { id: taskId }, select: { teamId: true } });
+        if (task) {
+            notifyTeam(task.teamId, "task_updated", {
+                action: "checklist_created",
+                taskId,
+                actingUserId,
+                timestamp: Date.now(),
+            });
+        }
         sendResponse(res, 201, item);
     } catch (error: any) {
         sendResponse(res, 500, { error: error.message });
@@ -161,11 +171,23 @@ export const createChecklistItem = async (req: Request, res: Response) => {
 };
 
 export const updateChecklistItem = async (req: Request, res: Response) => {
-    const { itemId } = req.params;
+    const { taskId, itemId } = req.params;
     const { isCompleted, title } = req.body;
+    const actingUserId = (req.headers["x-user-id"] as string) || (req as any).user?.userId;
 
     try {
+        const chk = await prisma.checklistItem.findUnique({ where: { id: itemId }, include: { task: { select: { id: true, teamId: true } } } });
         const item = await tasksService.updateChecklist(itemId, { isCompleted, title });
+        const targetTeamId = chk?.task?.teamId;
+        const targetTaskId = taskId || chk?.task?.id;
+        if (targetTeamId) {
+            notifyTeam(targetTeamId, "task_updated", {
+                action: "checklist_updated",
+                taskId: targetTaskId,
+                actingUserId,
+                timestamp: Date.now(),
+            });
+        }
         sendResponse(res, 200, item);
     } catch (error: any) {
         sendResponse(res, 500, { error: error.message });
@@ -173,10 +195,22 @@ export const updateChecklistItem = async (req: Request, res: Response) => {
 };
 
 export const deleteChecklistItem = async (req: Request, res: Response) => {
-    const { itemId } = req.params;
+    const { taskId, itemId } = req.params;
+    const actingUserId = (req.headers["x-user-id"] as string) || (req as any).user?.userId;
 
     try {
+        const chk = await prisma.checklistItem.findUnique({ where: { id: itemId }, include: { task: { select: { id: true, teamId: true } } } });
+        const targetTeamId = chk?.task?.teamId;
+        const targetTaskId = taskId || chk?.task?.id;
         await tasksService.deleteChecklist(itemId);
+        if (targetTeamId) {
+            notifyTeam(targetTeamId, "task_updated", {
+                action: "checklist_deleted",
+                taskId: targetTaskId,
+                actingUserId,
+                timestamp: Date.now(),
+            });
+        }
         sendResponse(res, 200, { message: "Checklist item deleted." });
     } catch (error: any) {
         sendResponse(res, 500, { error: error.message });
