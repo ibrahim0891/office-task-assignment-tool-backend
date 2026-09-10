@@ -556,6 +556,7 @@ model ProjectSubtask {
   isCompleted      Boolean              @default(false)
   acceptanceStatus TaskAcceptanceStatus @default(ACCEPTED)
   reviewerId       String?
+  order            Int                  @default(0)
   createdAt        DateTime             @default(now())
   updatedAt        DateTime             @updatedAt
 
@@ -567,6 +568,7 @@ model ProjectSubtask {
   activities ProjectTaskActivity[]
 
   @@index([parentTaskId])
+  @@index([parentTaskId, order])
   @@index([columnId])
   @@index([assignedToId])
   @@index([isCompleted])

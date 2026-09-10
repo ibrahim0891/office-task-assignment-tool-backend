@@ -416,6 +416,42 @@ export async function deleteSubtask(req: Request, res: Response) {
     }
 }
 
+export async function reorderSubtasks(req: Request, res: Response) {
+    try {
+        const { projectId, taskId } = req.params;
+        const { subtaskOrders } = req.body;
+        const actingUserId = (req as any).user?.userId || (req.headers["x-user-id"] as string);
+
+        if (!Array.isArray(subtaskOrders)) {
+            return sendResponse(res, 400, { error: "subtaskOrders array is required." });
+        }
+
+        const subtasks = await projectsService.reorderProjectSubtasks(taskId, subtaskOrders);
+
+        const project = await prisma.project.findUnique({
+            where: { id: projectId },
+            select: { teamId: true },
+        });
+
+        if (project?.teamId) {
+            notifyTeam(project.teamId, "project_updated", {
+                projectId,
+                taskId,
+                action: "subtask_reorder",
+                actingUserId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 200, subtasks);
+    } catch (error: any) {
+        if (error.message?.includes("Access denied")) {
+            return sendResponse(res, 403, { error: error.message });
+        }
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
 // ----------------------------------------------------
 // DEPENDENCIES
 // ----------------------------------------------------

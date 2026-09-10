@@ -296,7 +296,7 @@ export async function getProjectDetail(projectId: string) {
                                 orderBy: { createdAt: "desc" },
                             },
                         },
-                        orderBy: { createdAt: "asc" },
+                        orderBy: [{ order: "asc" }, { createdAt: "asc" }],
                     },
                     reworkLogs: {
                         include: { rejectedBy: true },
@@ -861,7 +861,7 @@ export async function createProjectTask(projectId: string, data: any, createdByI
                 })),
             },
             subtasks: {
-                create: subtasks.map((st: any) => ({
+                create: subtasks.map((st: any, idx: number) => ({
                     title: st.title,
                     description: st.description || "",
                     assignedToId: st.assignedToId,
@@ -869,6 +869,7 @@ export async function createProjectTask(projectId: string, data: any, createdByI
                     dueDate: new Date(st.dueDate || dDate),
                     estimatedDays: st.estimatedDays ? Number(st.estimatedDays) : 1.0,
                     reviewerId: st.reviewerId || null,
+                    order: st.order !== undefined ? Number(st.order) : idx,
                 })),
             },
         },
@@ -877,7 +878,10 @@ export async function createProjectTask(projectId: string, data: any, createdByI
             createdBy: true,
             reviewer: true,
             assignees: { include: { user: true } },
-            subtasks: { include: { assignedTo: true, reviewer: true } },
+            subtasks: {
+                include: { assignedTo: true, reviewer: true },
+                orderBy: [{ order: "asc" }, { createdAt: "asc" }],
+            },
         },
     });
 
@@ -969,7 +973,10 @@ export async function updateProjectTask(taskId: string, data: any) {
             createdBy: true,
             reviewer: true,
             assignees: { include: { user: true } },
-            subtasks: { include: { assignedTo: true, reviewer: true } },
+            subtasks: {
+                include: { assignedTo: true, reviewer: true },
+                orderBy: [{ order: "asc" }, { createdAt: "asc" }],
+            },
         },
     });
 }
@@ -1117,6 +1124,18 @@ export async function createProjectSubtask(taskId: string, data: any, actingUser
         }
     }
 
+    let targetOrder = 0;
+    if (data.order !== undefined && !isNaN(Number(data.order))) {
+        targetOrder = Number(data.order);
+    } else {
+        const lastSubtask = await prisma.projectSubtask.findFirst({
+            where: { parentTaskId: taskId },
+            orderBy: { order: "desc" },
+            select: { order: true },
+        });
+        targetOrder = (lastSubtask?.order ?? -1) + 1;
+    }
+
     const createdSubtask = await prisma.projectSubtask.create({
         data: {
             parentTaskId: taskId,
@@ -1131,6 +1150,7 @@ export async function createProjectSubtask(taskId: string, data: any, actingUser
             actualDays: data.actualDays ? Number(data.actualDays) : 0,
             isCompleted,
             reviewerId: data.reviewerId || null,
+            order: targetOrder,
         },
         include: { assignedTo: true, reviewer: true, column: true },
     });
@@ -1186,6 +1206,7 @@ export async function updateProjectSubtask(subtaskId: string, data: any, actingU
     if (data.description !== undefined) updateData.description = data.description;
     if (data.assignedToId !== undefined) updateData.assignedToId = data.assignedToId;
     if (data.priority !== undefined) updateData.priority = data.priority;
+    if (data.order !== undefined && !isNaN(Number(data.order))) updateData.order = Number(data.order);
     if (data.columnId !== undefined) {
         updateData.columnId = data.columnId;
         const targetCol = await prisma.projectColumn.findUnique({ where: { id: data.columnId } });
@@ -1291,6 +1312,33 @@ export async function deleteProjectSubtask(subtaskId: string, actingUserId?: str
 
     return await prisma.projectSubtask.delete({
         where: { id: subtaskId },
+    });
+}
+
+export async function reorderProjectSubtasks(
+    taskId: string,
+    subtaskOrders: { id: string; order: number; columnId?: string }[]
+) {
+    if (!Array.isArray(subtaskOrders) || subtaskOrders.length === 0) {
+        return [];
+    }
+
+    await prisma.$transaction(
+        subtaskOrders.map((item) =>
+            prisma.projectSubtask.update({
+                where: { id: item.id, parentTaskId: taskId },
+                data: {
+                    order: Number(item.order),
+                    ...(item.columnId ? { columnId: item.columnId } : {}),
+                },
+            })
+        )
+    );
+
+    return await prisma.projectSubtask.findMany({
+        where: { parentTaskId: taskId },
+        include: { assignedTo: true, reviewer: true, column: true },
+        orderBy: [{ order: "asc" }, { createdAt: "asc" }],
     });
 }
 
