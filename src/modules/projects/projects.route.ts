@@ -40,6 +40,8 @@ router.post("/projects/:projectId/tasks/:taskId/subtasks", resolveProjectAccess,
 router.put("/projects/:projectId/tasks/:taskId/subtasks/reorder", resolveProjectAccess, projectsController.reorderSubtasks);
 router.put("/projects/:projectId/tasks/:taskId/subtasks/:subtaskId", resolveProjectAccess, projectsController.updateSubtask);
 router.delete("/projects/:projectId/tasks/:taskId/subtasks/:subtaskId", resolveProjectAccess, projectsController.deleteSubtask);
+router.post("/projects/:projectId/tasks/:taskId/subtasks/:subtaskId/attachments/upload", resolveProjectAccess, projectsController.uploadSubtaskAttachment);
+router.delete("/projects/:projectId/tasks/:taskId/subtasks/:subtaskId/attachments/:attachmentId", resolveProjectAccess, projectsController.deleteSubtaskAttachment);
 
 // Task Dependencies (DAG)
 router.post("/projects/:projectId/dependencies", requireProjectManagerOrLeader, projectsController.createDependency);

@@ -128,6 +128,7 @@ model User {
   createdProjectAssets     ProjectAsset[]        @relation("ProjectAssetCreatedBy")
   createdProjectDocs       ProjectDoc[]          @relation("ProjectDocCreatedBy")
   createdProjectLinks      ProjectLink[]         @relation("ProjectLinkCreatedBy")
+  projectTaskAttachments   ProjectTaskAttachment[] @relation("ProjectTaskAttachmentUser")
 }
 
 model Team {
@@ -513,6 +514,7 @@ model ProjectTask {
   incidents       ProjectIncident[]
   comments        ProjectTaskComment[]
   activities      ProjectTaskActivity[]
+  attachments     ProjectTaskAttachment[]
 
   @@index([projectId])
   @@index([columnId])
@@ -566,6 +568,7 @@ model ProjectSubtask {
   reviewer   User?                @relation("ProjectSubtaskReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
   comments   ProjectTaskComment[]
   activities ProjectTaskActivity[]
+  attachments ProjectTaskAttachment[]
 
   @@index([parentTaskId])
   @@index([parentTaskId, order])
@@ -773,4 +776,24 @@ model ProjectLink {
   @@index([projectId])
   @@index([categoryId])
   @@index([createdById])
+}
+
+// 4. Project Task & Subtask Attachments
+model ProjectTaskAttachment {
+  id        String   @id @default(uuid())
+  taskId    String
+  subtaskId String?
+  userId    String
+  name      String
+  url       String   @db.Text
+  type      String?  @default("IMAGE")
+  createdAt DateTime @default(now())
+
+  task    ProjectTask     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  subtask ProjectSubtask? @relation(fields: [subtaskId], references: [id], onDelete: Cascade)
+  user    User            @relation("ProjectTaskAttachmentUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+  @@index([subtaskId])
+  @@index([userId])
 }

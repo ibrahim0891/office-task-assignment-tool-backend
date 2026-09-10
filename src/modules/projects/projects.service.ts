@@ -1,6 +1,7 @@
 import { prisma } from "../../config/prisma";
 import { createNotification } from "../notifications/notifications.service";
 import { notifyTeam, notifyUser } from "../../config/socket";
+import { deleteFromCloudinary, uploadImageAttachment } from "../../cloudinary";
 import {
     wouldCreateCycle,
     calculateCriticalPath,
@@ -290,6 +291,12 @@ export async function getProjectDetail(projectId: string) {
                                 orderBy: { createdAt: "asc" },
                             },
                             activities: {
+                                include: {
+                                    user: { select: { id: true, name: true, fullName: true, avatarUrl: true } },
+                                },
+                                orderBy: { createdAt: "desc" },
+                            },
+                            attachments: {
                                 include: {
                                     user: { select: { id: true, name: true, fullName: true, avatarUrl: true } },
                                 },
@@ -1152,7 +1159,17 @@ export async function createProjectSubtask(taskId: string, data: any, actingUser
             reviewerId: data.reviewerId || null,
             order: targetOrder,
         },
-        include: { assignedTo: true, reviewer: true, column: true },
+        include: {
+            assignedTo: true,
+            reviewer: true,
+            column: true,
+            attachments: {
+                include: {
+                    user: { select: { id: true, name: true, fullName: true, avatarUrl: true } },
+                },
+                orderBy: { createdAt: "desc" },
+            },
+        },
     });
 
     if (targetAssigneeId && targetAssigneeId !== actingUserId) {
@@ -1281,8 +1298,108 @@ export async function updateProjectSubtask(subtaskId: string, data: any, actingU
     return await prisma.projectSubtask.update({
         where: { id: subtaskId },
         data: updateData,
-        include: { assignedTo: true, reviewer: true, column: true },
+        include: {
+            assignedTo: true,
+            reviewer: true,
+            column: true,
+            attachments: {
+                include: {
+                    user: { select: { id: true, name: true, fullName: true, avatarUrl: true } },
+                },
+                orderBy: { createdAt: "desc" },
+            },
+        },
     });
+}
+
+export async function uploadProjectSubtaskAttachment(
+    taskId: string,
+    subtaskId: string,
+    imageBase64: string,
+    filename: string,
+    userId: string
+) {
+    const subtask = await prisma.projectSubtask.findUnique({
+        where: { id: subtaskId },
+        include: {
+            parentTask: {
+                include: {
+                    project: { include: { members: true } },
+                },
+            },
+        },
+    });
+    if (!subtask) {
+        throw new Error("Subtask not found.");
+    }
+
+    const imageUrl = await uploadImageAttachment(imageBase64, "project_subtask_attachments");
+
+    const attachment = await prisma.projectTaskAttachment.create({
+        data: {
+            taskId,
+            subtaskId,
+            userId,
+            name: filename,
+            url: imageUrl,
+            type: "IMAGE",
+        },
+        include: {
+            user: { select: { id: true, name: true, fullName: true, avatarUrl: true } },
+        },
+    });
+
+    await prisma.projectTaskActivity.create({
+        data: {
+            taskId,
+            subtaskId,
+            userId,
+            actionType: "ATTACHMENT",
+            details: JSON.stringify({
+                name: attachment.name,
+                url: attachment.url,
+            }),
+        },
+    });
+
+    return attachment;
+}
+
+export async function deleteProjectSubtaskAttachment(
+    subtaskId: string,
+    attachmentId: string,
+    actingUserId?: string
+) {
+    const attachment = await prisma.projectTaskAttachment.findUnique({
+        where: { id: attachmentId },
+    });
+    if (!attachment) {
+        throw new Error("Attachment not found.");
+    }
+
+    if (attachment.url) {
+        await deleteFromCloudinary(attachment.url);
+    }
+
+    await prisma.projectTaskAttachment.delete({
+        where: { id: attachmentId },
+    });
+
+    if (actingUserId && attachment.taskId) {
+        await prisma.projectTaskActivity.create({
+            data: {
+                taskId: attachment.taskId,
+                subtaskId: attachment.subtaskId,
+                userId: actingUserId,
+                actionType: "ATTACHMENT",
+                details: JSON.stringify({
+                    note: `Deleted attachment: ${attachment.name}`,
+                }),
+            },
+        });
+    }
+
+    return { message: "Attachment deleted successfully." };
 }
 
 export async function deleteProjectSubtask(subtaskId: string, actingUserId?: string) {

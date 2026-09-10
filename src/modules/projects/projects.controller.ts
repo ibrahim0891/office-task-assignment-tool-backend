@@ -416,6 +416,77 @@ export async function deleteSubtask(req: Request, res: Response) {
     }
 }
 
+export async function uploadSubtaskAttachment(req: Request, res: Response) {
+    try {
+        const { taskId, subtaskId } = req.params;
+        const { imageBase64, filename, userId } = req.body;
+        const actingUserId = userId || (req as any).user?.userId || (req.headers["x-user-id"] as string);
+
+        if (!imageBase64 || !filename) {
+            return sendResponse(res, 400, { error: "Image data and filename are required." });
+        }
+
+        const attachment = await projectsService.uploadProjectSubtaskAttachment(
+            taskId,
+            subtaskId,
+            imageBase64,
+            filename,
+            actingUserId
+        );
+
+        const existing = await prisma.projectSubtask.findUnique({
+            where: { id: subtaskId },
+            select: { parentTaskId: true, parentTask: { select: { projectId: true, project: { select: { teamId: true } } } } },
+        });
+        if (existing?.parentTask?.project?.teamId) {
+            notifyTeam(existing.parentTask.project.teamId, "project_updated", {
+                projectId: existing.parentTask.projectId,
+                taskId: existing.parentTaskId,
+                subtaskId,
+                action: "subtask_attachment_upload",
+                actingUserId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 201, attachment);
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+export async function deleteSubtaskAttachment(req: Request, res: Response) {
+    try {
+        const { subtaskId, attachmentId } = req.params;
+        const actingUserId = (req as any).user?.userId || (req.headers["x-user-id"] as string);
+
+        const result = await projectsService.deleteProjectSubtaskAttachment(
+            subtaskId,
+            attachmentId,
+            actingUserId
+        );
+
+        const existing = await prisma.projectSubtask.findUnique({
+            where: { id: subtaskId },
+            select: { parentTaskId: true, parentTask: { select: { projectId: true, project: { select: { teamId: true } } } } },
+        });
+        if (existing?.parentTask?.project?.teamId) {
+            notifyTeam(existing.parentTask.project.teamId, "project_updated", {
+                projectId: existing.parentTask.projectId,
+                taskId: existing.parentTaskId,
+                subtaskId,
+                action: "subtask_attachment_delete",
+                actingUserId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 200, result);
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
 export async function reorderSubtasks(req: Request, res: Response) {
     try {
         const { projectId, taskId } = req.params;
