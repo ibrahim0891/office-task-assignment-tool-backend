@@ -2048,6 +2048,17 @@ export async function cancelProjectInvitation(invitationId: string, actingUserId
     };
 }
 
+const VALID_COLUMN_TYPES = ["BACKLOG", "TODO", "IN_PROGRESS", "NEED_ATTENTION", "COMPLETED", "CANCELLED", "CUSTOM"];
+
+function normalizeColumnType(type?: string): "BACKLOG" | "TODO" | "IN_PROGRESS" | "NEED_ATTENTION" | "COMPLETED" | "CANCELLED" | "CUSTOM" {
+    if (!type) return "CUSTOM";
+    const upper = type.toUpperCase();
+    if (upper === "DONE") return "COMPLETED";
+    if (upper === "IN_REVIEW" || upper === "REVIEW") return "NEED_ATTENTION";
+    if (VALID_COLUMN_TYPES.includes(upper)) return upper as any;
+    return "CUSTOM";
+}
+
 export async function createProjectColumn(projectId: string, name: string, type: string = "CUSTOM", isComplete?: boolean) {
     const existing = await prisma.projectColumn.findFirst({
         where: { projectId, name: { equals: name, mode: "insensitive" } },
@@ -2066,7 +2077,7 @@ export async function createProjectColumn(projectId: string, name: string, type:
         data: {
             projectId,
             name: name.trim(),
-            type: "CUSTOM",
+            type: normalizeColumnType(type),
             order,
             isComplete: !!isComplete,
         },
@@ -2095,7 +2106,7 @@ export async function updateProjectColumn(columnId: string, name?: string, type?
         updateData.isComplete = isComplete;
     }
     if (type !== undefined) {
-        updateData.type = type;
+        updateData.type = normalizeColumnType(type);
     }
 
     return await prisma.projectColumn.update({
