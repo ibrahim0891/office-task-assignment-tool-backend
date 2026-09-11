@@ -89,6 +89,15 @@ async function extractTeamId(req: Request): Promise<string | undefined> {
             teamId = inv.project.teamId;
         }
     }
+    if (!teamId && req.params?.id) {
+        const folder = await prisma.folder.findUnique({
+            where: { id: req.params.id },
+            select: { teamId: true },
+        });
+        if (folder) {
+            teamId = folder.teamId;
+        }
+    }
     return teamId;
 }
 

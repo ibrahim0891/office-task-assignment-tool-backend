@@ -1,13 +1,8 @@
 import { prisma } from "../../config/prisma";
 
-export const getFoldersByTeamId = async (teamId: string) => {
-    let folders = await prisma.folder.findMany({
-        where: { teamId },
-        include: { projects: { where: { isDeleted: false } } },
-        orderBy: { createdAt: "asc" },
-    });
-
-    if (folders.length === 0) {
+const ensureWorkspaceFolderSetup = async (teamId: string) => {
+    const totalCount = await prisma.folder.count({ where: { teamId } });
+    if (totalCount === 0) {
         // Create the initial default folder
         const defaultFolder = await prisma.folder.create({
             data: {
@@ -15,53 +10,131 @@ export const getFoldersByTeamId = async (teamId: string) => {
                 name: "New Folder",
             },
         });
-        // Associate all existing projects of this team with this default folder
+        // Associate all unparented projects of this team with the default folder
         await prisma.project.updateMany({
             where: { teamId, folderId: null },
             data: { folderId: defaultFolder.id },
         });
-
-        // Re-fetch folders with projects included
-        folders = await prisma.folder.findMany({
-            where: { teamId },
-            include: { projects: { where: { isDeleted: false } } },
-            orderBy: { createdAt: "asc" },
-        });
     } else {
-        // Ensure projects with null folderId are assigned to the oldest/default folder
+        // Ensure any projects with null folderId are assigned to the oldest/default folder
         const orphanedProjectsCount = await prisma.project.count({
             where: { teamId, folderId: null },
         });
         if (orphanedProjectsCount > 0) {
-            const defaultFolder = folders[0];
-            await prisma.project.updateMany({
-                where: { teamId, folderId: null },
-                data: { folderId: defaultFolder.id },
-            });
-            // Re-fetch folders with projects
-            folders = await prisma.folder.findMany({
+            const defaultFolder = await prisma.folder.findFirst({
                 where: { teamId },
-                include: { projects: { where: { isDeleted: false } } },
                 orderBy: { createdAt: "asc" },
             });
+            if (defaultFolder) {
+                await prisma.project.updateMany({
+                    where: { teamId, folderId: null },
+                    data: { folderId: defaultFolder.id },
+                });
+            }
         }
     }
-    return folders;
 };
 
-export const createFolderItem = async (teamId: string, name: string, emoji?: string) => {
+export const getFoldersByTeamId = async (
+    teamId: string,
+    userId?: string,
+    isWorkspaceLeader?: boolean
+) => {
+    await ensureWorkspaceFolderSetup(teamId);
+
+    // If workspace leader or no specific user context, return all folders with all non-deleted projects
+    if (isWorkspaceLeader || !userId) {
+        return await prisma.folder.findMany({
+            where: { teamId },
+            include: {
+                projects: {
+                    where: { isDeleted: false },
+                    include: { members: true },
+                },
+                creator: {
+                    select: { id: true, name: true, fullName: true, avatarUrl: true },
+                },
+            },
+            orderBy: { createdAt: "asc" },
+        });
+    }
+
+    // Option 1 (Access-Scoped Visibility):
+    // A regular member sees a folder IF:
+    // 1. They created the folder (creatorId === userId), OR
+    // 2. The folder contains at least 1 active non-deleted project accessible to them (as manager or assigned member).
+    const userAccessibleProjectWhere = {
+        isDeleted: false,
+        OR: [
+            { managerId: userId },
+            { members: { some: { userId } } },
+        ],
+    };
+
+    return await prisma.folder.findMany({
+        where: {
+            teamId,
+            OR: [
+                { creatorId: userId },
+                {
+                    projects: {
+                        some: userAccessibleProjectWhere,
+                    },
+                },
+            ],
+        },
+        include: {
+            projects: {
+                where: userAccessibleProjectWhere,
+                include: { members: true },
+            },
+            creator: {
+                select: { id: true, name: true, fullName: true, avatarUrl: true },
+            },
+        },
+        orderBy: { createdAt: "asc" },
+    });
+};
+
+export const createFolderItem = async (
+    teamId: string,
+    name: string,
+    emoji?: string,
+    creatorId?: string
+) => {
     if (!name || !name.trim()) throw new Error("Folder name is required.");
     return prisma.folder.create({
         data: {
             teamId,
             name: name.trim(),
             emoji: emoji || "📁",
+            creatorId: creatorId || null,
         },
-        include: { projects: { where: { isDeleted: false } } },
+        include: {
+            projects: { where: { isDeleted: false } },
+            creator: {
+                select: { id: true, name: true, fullName: true, avatarUrl: true },
+            },
+        },
     });
 };
 
-export const updateFolderItem = async (id: string, name?: string, emoji?: string) => {
+export const updateFolderItem = async (
+    id: string,
+    name?: string,
+    emoji?: string,
+    actingUserId?: string,
+    isWorkspaceLeader?: boolean
+) => {
+    const folder = await prisma.folder.findUnique({ where: { id } });
+    if (!folder) throw new Error("Folder not found.");
+
+    // Option 1 Rule: Only folder creator or workspace leader can rename/edit folder
+    const canManage = isWorkspaceLeader || (actingUserId && folder.creatorId === actingUserId);
+    if (!canManage) {
+        throw new Error("Permission denied. Only the folder creator or workspace owner can rename or edit this folder.");
+    }
+
     const updateData: any = {};
     if (name !== undefined) {
         if (!name.trim()) throw new Error("Folder name is required.");
@@ -73,11 +146,30 @@ export const updateFolderItem = async (id: string, name?: string, emoji?: string
     return prisma.folder.update({
         where: { id },
         data: updateData,
-        include: { projects: { where: { isDeleted: false } } },
+        include: {
+            projects: { where: { isDeleted: false } },
+            creator: {
+                select: { id: true, name: true, fullName: true, avatarUrl: true },
+            },
+        },
     });
 };
 
-export const deleteFolderItem = async (id: string, teamId: string) => {
+export const deleteFolderItem = async (
+    id: string,
+    teamId: string,
+    actingUserId?: string,
+    isWorkspaceLeader?: boolean
+) => {
+    const folder = await prisma.folder.findUnique({ where: { id } });
+    if (!folder) throw new Error("Folder not found.");
+
+    // Option 1 Rule: Only folder creator or workspace leader can delete folder
+    const canManage = isWorkspaceLeader || (actingUserId && folder.creatorId === actingUserId);
+    if (!canManage) {
+        throw new Error("Permission denied. Only the folder creator or workspace owner can delete this folder.");
+    }
+
     const folders = await prisma.folder.findMany({
         where: { teamId },
         orderBy: { createdAt: "asc" },

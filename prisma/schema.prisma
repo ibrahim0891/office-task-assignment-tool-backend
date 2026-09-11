@@ -111,6 +111,7 @@ model User {
 
   // Project Module Relations
   managedProjects          Project[]             @relation("ProjectManager")
+  createdFolders           Folder[]              @relation("FolderCreator")
   projectMemberships       ProjectMember[]
   createdProjectTasks      ProjectTask[]         @relation("ProjectTaskCreatedBy")
   reviewedProjectTasks     ProjectTask[]         @relation("ProjectTaskReviewer")
@@ -361,15 +362,18 @@ model PushSubscription {
 model Folder {
   id        String    @id @default(uuid())
   teamId    String
+  creatorId String?
   name      String
   emoji     String    @default("📁")
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 
   team      Team      @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  creator   User?     @relation("FolderCreator", fields: [creatorId], references: [id], onDelete: SetNull)
   projects  Project[]
 
   @@index([teamId])
+  @@index([creatorId])
 }
 
 model Project {
