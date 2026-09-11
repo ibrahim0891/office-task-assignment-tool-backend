@@ -87,7 +87,75 @@ export async function updateProject(req: Request, res: Response) {
 export async function deleteProject(req: Request, res: Response) {
     try {
         const { projectId } = req.params;
-        const deleted = await projectsService.deleteProject(projectId);
+        const userId = (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
+        const deleted = await projectsService.softDeleteProject(projectId, userId);
+
+        notifyTeam(deleted.teamId, "project_archived", {
+            projectId: deleted.id,
+            timestamp: Date.now(),
+        });
+        notifyTeam(deleted.teamId, "project_updated", {
+            projectId: deleted.id,
+            action: "project_archive",
+            timestamp: Date.now(),
+        });
+
+        sendResponse(res, 200, { message: "Project moved to archive successfully.", project: deleted });
+    } catch (error: any) {
+        const status = error.message?.includes("Only the project manager") ? 403 : 400;
+        sendResponse(res, status, { error: error.message });
+    }
+}
+
+export async function getArchivedProjects(req: Request, res: Response) {
+    try {
+        const teamId = (req.query.teamId as string) || (req.headers["x-team-id"] as string);
+        const userId = (req.query.userId as string) || (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
+        const isWorkspaceLeader = (req as any).userRole === "LEADER" || (req as any).user?.role === "LEADER";
+
+        if (!teamId) {
+            return sendResponse(res, 400, { error: "teamId is required." });
+        }
+
+        const projects = await projectsService.getArchivedProjects(teamId, userId, isWorkspaceLeader);
+        sendResponse(res, 200, projects);
+    } catch (error: any) {
+        sendResponse(res, 500, { error: error.message });
+    }
+}
+
+export async function restoreProject(req: Request, res: Response) {
+    try {
+        const { projectId } = req.params;
+        const userId = (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
+        const isWorkspaceLeader = (req as any).userRole === "LEADER" || (req as any).user?.role === "LEADER";
+
+        const restored = await projectsService.restoreProject(projectId, userId, isWorkspaceLeader);
+
+        notifyTeam(restored.teamId, "project_restored", {
+            projectId: restored.id,
+            timestamp: Date.now(),
+        });
+        notifyTeam(restored.teamId, "project_updated", {
+            projectId: restored.id,
+            action: "project_restore",
+            timestamp: Date.now(),
+        });
+
+        sendResponse(res, 200, { message: "Project restored successfully.", project: restored });
+    } catch (error: any) {
+        const status = error.message?.includes("Only the project manager or workspace owner") ? 403 : 400;
+        sendResponse(res, status, { error: error.message });
+    }
+}
+
+export async function permanentlyDeleteProject(req: Request, res: Response) {
+    try {
+        const { projectId } = req.params;
+        const userId = (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
+        const isWorkspaceLeader = (req as any).userRole === "LEADER" || (req as any).user?.role === "LEADER";
+
+        const deleted = await projectsService.permanentlyDeleteProject(projectId, userId, isWorkspaceLeader);
 
         notifyTeam(deleted.teamId, "project_deleted", {
             projectId: deleted.id,
@@ -99,9 +167,10 @@ export async function deleteProject(req: Request, res: Response) {
             timestamp: Date.now(),
         });
 
-        sendResponse(res, 200, { message: "Project deleted successfully." });
+        sendResponse(res, 200, { message: "Project permanently deleted." });
     } catch (error: any) {
-        sendResponse(res, 400, { error: error.message });
+        const status = error.message?.includes("Only the project manager or workspace owner") ? 403 : 400;
+        sendResponse(res, status, { error: error.message });
     }
 }
 

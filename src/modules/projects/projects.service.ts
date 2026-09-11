@@ -123,7 +123,7 @@ function mapProjectData(project: any) {
  * Lists all projects for a team with aggregated metrics (filtered by user membership for non-leaders)
  */
 export async function getProjectsList(teamId?: string, userId?: string, isWorkspaceLeader?: boolean) {
-    let whereClause: any = {};
+    let whereClause: any = { isDeleted: false };
 
     if (userId) {
         const ledTeams = await prisma.userTeam.findMany({
@@ -133,6 +133,8 @@ export async function getProjectsList(teamId?: string, userId?: string, isWorksp
         const ledTeamIds = ledTeams.map((t) => t.teamId);
 
         whereClause = {
+            isDeleted: false,
+            ...(teamId ? { teamId } : {}),
             OR: [
                 { managerId: userId },
                 { members: { some: { userId } } },
@@ -140,7 +142,7 @@ export async function getProjectsList(teamId?: string, userId?: string, isWorksp
             ],
         };
     } else if (teamId) {
-        whereClause = { teamId };
+        whereClause = { teamId, isDeleted: false };
     }
 
     const projects = await prisma.project.findMany({
@@ -192,7 +194,7 @@ export async function getProjectsList(teamId?: string, userId?: string, isWorksp
  * Gets portfolio-wide metrics across all projects for a team
  */
 export async function getPortfolioSummary(teamId?: string, userId?: string, isWorkspaceLeader?: boolean) {
-    let whereClause: any = {};
+    let whereClause: any = { isDeleted: false };
 
     if (userId) {
         const ledTeams = await prisma.userTeam.findMany({
@@ -202,6 +204,8 @@ export async function getPortfolioSummary(teamId?: string, userId?: string, isWo
         const ledTeamIds = ledTeams.map((t) => t.teamId);
 
         whereClause = {
+            isDeleted: false,
+            ...(teamId ? { teamId } : {}),
             OR: [
                 { managerId: userId },
                 { members: { some: { userId } } },
@@ -209,7 +213,7 @@ export async function getPortfolioSummary(teamId?: string, userId?: string, isWo
             ],
         };
     } else if (teamId) {
-        whereClause = { teamId };
+        whereClause = { teamId, isDeleted: false };
     }
 
     const projects = await prisma.project.findMany({
@@ -500,12 +504,150 @@ export async function updateProject(projectId: string, data: any) {
 }
 
 /**
- * Deletes a project
+ * Soft deletes a project (moves to archive).
+ * ONLY the project manager can delete the project.
  */
-export async function deleteProject(projectId: string) {
+export async function softDeleteProject(projectId: string, actingUserId: string) {
+    const project = await prisma.project.findUnique({
+        where: { id: projectId },
+        select: { id: true, managerId: true, teamId: true, title: true, isDeleted: true },
+    });
+
+    if (!project) throw new Error("Project not found.");
+    if (project.isDeleted) throw new Error("Project is already archived.");
+
+    if (project.managerId !== actingUserId) {
+        throw new Error("Only the project manager can delete this project.");
+    }
+
+    const updated = await prisma.project.update({
+        where: { id: projectId },
+        data: {
+            isDeleted: true,
+            deletedAt: new Date(),
+            status: "ARCHIVED",
+        },
+    });
+
+    return updated;
+}
+
+/**
+ * Restores a soft-deleted project from archive.
+ * Only the project manager or workspace owner can restore.
+ */
+export async function restoreProject(projectId: string, actingUserId: string, isWorkspaceLeader: boolean) {
+    const project = await prisma.project.findUnique({
+        where: { id: projectId },
+        select: { id: true, managerId: true, teamId: true, title: true, isDeleted: true },
+    });
+
+    if (!project) throw new Error("Project not found.");
+    if (!project.isDeleted) throw new Error("Project is not archived.");
+
+    if (project.managerId !== actingUserId && !isWorkspaceLeader) {
+        throw new Error("Only the project manager or workspace owner can restore this project.");
+    }
+
+    const updated = await prisma.project.update({
+        where: { id: projectId },
+        data: {
+            isDeleted: false,
+            deletedAt: null,
+            status: "ACTIVE",
+        },
+    });
+
+    return updated;
+}
+
+/**
+ * Permanently deletes a project and cascades all related data.
+ * Only the project manager or workspace owner can delete permanently.
+ */
+export async function permanentlyDeleteProject(projectId: string, actingUserId: string, isWorkspaceLeader: boolean) {
+    const project = await prisma.project.findUnique({
+        where: { id: projectId },
+        select: { id: true, managerId: true, teamId: true, title: true, isDeleted: true },
+    });
+
+    if (!project) throw new Error("Project not found.");
+
+    if (project.managerId !== actingUserId && !isWorkspaceLeader) {
+        throw new Error("Only the project manager or workspace owner can permanently delete this project.");
+    }
+
     return await prisma.project.delete({
         where: { id: projectId },
     });
+}
+
+/**
+ * Legacy deleteProject function (soft deletes if actingUserId provided, else hard delete)
+ */
+export async function deleteProject(projectId: string, actingUserId?: string) {
+    if (actingUserId) {
+        return await softDeleteProject(projectId, actingUserId);
+    }
+    return await prisma.project.delete({
+        where: { id: projectId },
+    });
+}
+
+/**
+ * Gets archived (soft-deleted) projects for a workspace.
+ * Visible ONLY to the project manager or the workspace owner.
+ */
+export async function getArchivedProjects(teamId: string, userId: string, isWorkspaceLeader: boolean) {
+    if (!teamId) throw new Error("teamId is required.");
+
+    let whereClause: any = {
+        teamId,
+        isDeleted: true,
+    };
+
+    if (!isWorkspaceLeader) {
+        whereClause.managerId = userId;
+    }
+
+    const projects = await prisma.project.findMany({
+        where: whereClause,
+        include: {
+            team: {
+                select: { id: true, name: true, emoji: true },
+            },
+            manager: true,
+            folder: true,
+            members: {
+                include: { user: true },
+            },
+            columns: {
+                orderBy: { order: "asc" },
+            },
+            tasks: {
+                include: {
+                    column: true,
+                    assignees: { include: { user: true } },
+                    subtasks: true,
+                },
+            },
+        },
+        orderBy: { deletedAt: "desc" },
+    });
+
+    const list = projects.map((p) => {
+        const totalTasks = p.tasks.length;
+        const doneTasks = p.tasks.filter((t) => t.column?.isComplete).length;
+        const progress = calculateProjectProgress(p.tasks, p.columns);
+        return {
+            ...p,
+            progress,
+            totalTasks,
+            doneTasks,
+        };
+    });
+
+    return list.map(mapProjectData);
 }
 
 /**

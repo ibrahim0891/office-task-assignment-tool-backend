@@ -384,6 +384,8 @@ model Project {
   status      ProjectStatus @default(ACTIVE)
   progress    Float         @default(0) // Percentage 0 - 100
   managerId   String
+  isDeleted   Boolean       @default(false)
+  deletedAt   DateTime?
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 
@@ -406,6 +408,8 @@ model Project {
   @@index([folderId])
   @@index([managerId])
   @@index([status])
+  @@index([teamId, isDeleted])
+  @@index([managerId, isDeleted])
 }
 
 model ProjectMember {

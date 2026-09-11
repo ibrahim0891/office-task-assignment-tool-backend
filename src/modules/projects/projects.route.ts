@@ -7,6 +7,7 @@ const router = Router();
 // Project Portfolio & Summary (Global / user-scoped across teams)
 router.get("/projects", resolveWorkspaceContext, projectsController.getProjects);
 router.get("/projects/summary", resolveWorkspaceContext, projectsController.getPortfolioSummary);
+router.get("/projects/archived", resolveWorkspaceContext, projectsController.getArchivedProjects);
 
 // Project Invitations (Cross-workspace operations, user-authenticated)
 router.get("/projects/invitations/received", projectsController.getReceivedInvitations);
@@ -22,6 +23,8 @@ router.get("/projects/:projectId", resolveProjectAccess, projectsController.getP
 router.post("/projects", requireLeader, projectsController.createProject);
 router.put("/projects/:projectId", requireProjectManagerOrLeader, projectsController.updateProject);
 router.delete("/projects/:projectId", requireProjectManagerOrLeader, projectsController.deleteProject);
+router.delete("/projects/:projectId/permanent", requireProjectManagerOrLeader, projectsController.permanentlyDeleteProject);
+router.post("/projects/:projectId/restore", requireProjectManagerOrLeader, projectsController.restoreProject);
 router.get("/projects/:projectId/analytics", resolveProjectAccess, projectsController.getProjectAnalytics);
 
 // Project Members

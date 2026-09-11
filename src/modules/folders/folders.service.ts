@@ -3,7 +3,7 @@ import { prisma } from "../../config/prisma";
 export const getFoldersByTeamId = async (teamId: string) => {
     let folders = await prisma.folder.findMany({
         where: { teamId },
-        include: { projects: true },
+        include: { projects: { where: { isDeleted: false } } },
         orderBy: { createdAt: "asc" },
     });
 
@@ -24,7 +24,7 @@ export const getFoldersByTeamId = async (teamId: string) => {
         // Re-fetch folders with projects included
         folders = await prisma.folder.findMany({
             where: { teamId },
-            include: { projects: true },
+            include: { projects: { where: { isDeleted: false } } },
             orderBy: { createdAt: "asc" },
         });
     } else {
@@ -41,7 +41,7 @@ export const getFoldersByTeamId = async (teamId: string) => {
             // Re-fetch folders with projects
             folders = await prisma.folder.findMany({
                 where: { teamId },
-                include: { projects: true },
+                include: { projects: { where: { isDeleted: false } } },
                 orderBy: { createdAt: "asc" },
             });
         }
@@ -57,7 +57,7 @@ export const createFolderItem = async (teamId: string, name: string, emoji?: str
             name: name.trim(),
             emoji: emoji || "📁",
         },
-        include: { projects: true },
+        include: { projects: { where: { isDeleted: false } } },
     });
 };
 
@@ -73,7 +73,7 @@ export const updateFolderItem = async (id: string, name?: string, emoji?: string
     return prisma.folder.update({
         where: { id },
         data: updateData,
-        include: { projects: true },
+        include: { projects: { where: { isDeleted: false } } },
     });
 };
 
