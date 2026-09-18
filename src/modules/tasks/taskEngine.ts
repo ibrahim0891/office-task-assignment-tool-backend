@@ -236,6 +236,7 @@ export async function runCarryForwardAndRecurring(teamId: string, dateStr: strin
                             description: template.description,
                             columnId: template.columnId,
                             priority: template.priority,
+                            startDate: targetDate,
                             date: targetDate,
                             originalDate: targetDate,
                             dueDate: template.dueDate

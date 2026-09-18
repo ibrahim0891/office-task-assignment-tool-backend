@@ -194,6 +194,36 @@ export const updateChecklistItem = async (req: Request, res: Response) => {
     }
 };
 
+export const reorderChecklistItems = async (req: Request, res: Response) => {
+    const { taskId } = req.params;
+    const { items } = req.body;
+    const actingUserId = (req.headers["x-user-id"] as string) || (req as any).user?.userId;
+
+    try {
+        if (!Array.isArray(items)) {
+            return sendResponse(res, 400, { error: "items array is required" });
+        }
+        await tasksService.reorderChecklist(taskId, items);
+
+        const task = await prisma.task.findUnique({
+            where: { id: taskId },
+            select: { id: true, teamId: true },
+        });
+        if (task) {
+            notifyTeam(task.teamId, "task_updated", {
+                action: "checklist_reordered",
+                taskId: task.id,
+                actingUserId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 200, { message: "Checklist reordered." });
+    } catch (error: any) {
+        sendResponse(res, 500, { error: error.message });
+    }
+};
+
 export const deleteChecklistItem = async (req: Request, res: Response) => {
     const { taskId, itemId } = req.params;
     const actingUserId = (req.headers["x-user-id"] as string) || (req as any).user?.userId;

@@ -556,6 +556,142 @@ export async function deleteSubtaskAttachment(req: Request, res: Response) {
     }
 }
 
+export async function createSubtaskChecklist(req: Request, res: Response) {
+    try {
+        const { subtaskId } = req.params;
+        const { title } = req.body;
+        const actingUserId = (req as any).user?.userId || (req.headers["x-user-id"] as string);
+
+        if (!title || !title.trim()) {
+            return sendResponse(res, 400, { error: "Checklist item title is required." });
+        }
+
+        const item = await projectsService.createSubtaskChecklist(subtaskId, title, actingUserId);
+
+        const existing = await prisma.projectSubtask.findUnique({
+            where: { id: subtaskId },
+            select: { parentTaskId: true, parentTask: { select: { projectId: true, project: { select: { teamId: true } } } } },
+        });
+        if (existing?.parentTask?.project?.teamId) {
+            notifyTeam(existing.parentTask.project.teamId, "project_updated", {
+                projectId: existing.parentTask.projectId,
+                taskId: existing.parentTaskId,
+                subtaskId,
+                action: "subtask_checklist_create",
+                actingUserId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 201, item);
+    } catch (error: any) {
+        if (error.message?.includes("Access denied")) {
+            return sendResponse(res, 403, { error: error.message });
+        }
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+export async function updateSubtaskChecklist(req: Request, res: Response) {
+    try {
+        const { subtaskId, itemId } = req.params;
+        const { isCompleted, title } = req.body;
+        const actingUserId = (req as any).user?.userId || (req.headers["x-user-id"] as string);
+
+        const item = await projectsService.updateSubtaskChecklist(itemId, { isCompleted, title }, actingUserId);
+
+        const existing = await prisma.projectSubtask.findUnique({
+            where: { id: subtaskId },
+            select: { parentTaskId: true, parentTask: { select: { projectId: true, project: { select: { teamId: true } } } } },
+        });
+        if (existing?.parentTask?.project?.teamId) {
+            notifyTeam(existing.parentTask.project.teamId, "project_updated", {
+                projectId: existing.parentTask.projectId,
+                taskId: existing.parentTaskId,
+                subtaskId,
+                action: "subtask_checklist_update",
+                actingUserId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 200, item);
+    } catch (error: any) {
+        if (error.message?.includes("Access denied")) {
+            return sendResponse(res, 403, { error: error.message });
+        }
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+export async function deleteSubtaskChecklist(req: Request, res: Response) {
+    try {
+        const { subtaskId, itemId } = req.params;
+        const actingUserId = (req as any).user?.userId || (req.headers["x-user-id"] as string);
+
+        const existing = await prisma.projectSubtask.findUnique({
+            where: { id: subtaskId },
+            select: { parentTaskId: true, parentTask: { select: { projectId: true, project: { select: { teamId: true } } } } },
+        });
+
+        const result = await projectsService.deleteSubtaskChecklist(itemId, actingUserId);
+
+        if (existing?.parentTask?.project?.teamId) {
+            notifyTeam(existing.parentTask.project.teamId, "project_updated", {
+                projectId: existing.parentTask.projectId,
+                taskId: existing.parentTaskId,
+                subtaskId,
+                action: "subtask_checklist_delete",
+                actingUserId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 200, result);
+    } catch (error: any) {
+        if (error.message?.includes("Access denied")) {
+            return sendResponse(res, 403, { error: error.message });
+        }
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+export async function reorderSubtaskChecklist(req: Request, res: Response) {
+    try {
+        const { subtaskId } = req.params;
+        const { items } = req.body;
+        const actingUserId = (req as any).user?.userId || (req.headers["x-user-id"] as string);
+
+        if (!Array.isArray(items)) {
+            return sendResponse(res, 400, { error: "items array is required" });
+        }
+
+        await projectsService.reorderSubtaskChecklist(subtaskId, items, actingUserId);
+
+        const existing = await prisma.projectSubtask.findUnique({
+            where: { id: subtaskId },
+            select: { parentTaskId: true, parentTask: { select: { projectId: true, project: { select: { teamId: true } } } } },
+        });
+        if (existing?.parentTask?.project?.teamId) {
+            notifyTeam(existing.parentTask.project.teamId, "project_updated", {
+                projectId: existing.parentTask.projectId,
+                taskId: existing.parentTaskId,
+                subtaskId,
+                action: "subtask_checklist_reordered",
+                actingUserId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 200, { message: "Subtask checklist reordered." });
+    } catch (error: any) {
+        if (error.message?.includes("Access denied")) {
+            return sendResponse(res, 403, { error: error.message });
+        }
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
 export async function reorderSubtasks(req: Request, res: Response) {
     try {
         const { projectId, taskId } = req.params;
@@ -796,16 +932,17 @@ export async function cancelInvitation(req: Request, res: Response) {
 }
 
 // ----------------------------------------------------
+// ----------------------------------------------------
 // PROJECT COLUMNS
 // ----------------------------------------------------
 
 export async function createColumn(req: Request, res: Response) {
     try {
         const { projectId } = req.params;
-        const { name, type, isComplete } = req.body;
+        const { name, type, isComplete, weight } = req.body;
         if (!name) return sendResponse(res, 400, { error: "Column name is required." });
 
-        const column = await projectsService.createProjectColumn(projectId, name, type, isComplete);
+        const column = await projectsService.createProjectColumn(projectId, name, type, isComplete, weight);
 
         const project = await prisma.project.findUnique({
             where: { id: projectId },
@@ -829,9 +966,9 @@ export async function createColumn(req: Request, res: Response) {
 export async function updateColumn(req: Request, res: Response) {
     try {
         const { columnId } = req.params;
-        const { name, type, isComplete } = req.body;
+        const { name, type, isComplete, weight } = req.body;
 
-        const column = await projectsService.updateProjectColumn(columnId, name, type, isComplete);
+        const column = await projectsService.updateProjectColumn(columnId, name, type, isComplete, weight);
 
         const project = await prisma.project.findUnique({
             where: { id: column.projectId },
@@ -895,6 +1032,34 @@ export async function reorderColumns(req: Request, res: Response) {
             notifyTeam(project.teamId, "project_updated", {
                 projectId,
                 action: "column_reorder",
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 200, columns);
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+export async function batchUpdateColumnWeights(req: Request, res: Response) {
+    try {
+        const { projectId } = req.params;
+        const { weights } = req.body;
+        if (!Array.isArray(weights)) {
+            return sendResponse(res, 400, { error: "weights array is required." });
+        }
+
+        const columns = await projectsService.batchUpdateProjectColumnWeights(projectId, weights);
+
+        const project = await prisma.project.findUnique({
+            where: { id: projectId },
+            select: { teamId: true },
+        });
+        if (project?.teamId) {
+            notifyTeam(project.teamId, "project_updated", {
+                projectId,
+                action: "column_weights_update",
                 timestamp: Date.now(),
             });
         }

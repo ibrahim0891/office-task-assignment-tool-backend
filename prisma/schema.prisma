@@ -191,6 +191,7 @@ model Task {
   description   String?
   columnId      String
   priority      String    @default("MEDIUM") // LOW, MEDIUM, HIGH, URGENT
+  startDate     DateTime?
   dueDate       DateTime?
   date          DateTime // The date this task belongs to (for the calendar view)
   originalDate  DateTime // The date this task was originally scheduled for
@@ -237,12 +238,14 @@ model ChecklistItem {
   taskId      String
   title       String
   isCompleted Boolean  @default(false)
+  order       Int      @default(0)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
 
   @@index([taskId])
+  @@index([taskId, order])
   @@index([taskId, isCompleted])
 }
 
@@ -476,6 +479,7 @@ model ProjectColumn {
   type       ProjectColumnType @default(CUSTOM)
   order      Int
   isComplete Boolean           @default(false)
+  weight     Float?
   createdAt  DateTime          @default(now())
   updatedAt  DateTime          @updatedAt
 
@@ -574,9 +578,10 @@ model ProjectSubtask {
   column     ProjectColumn?       @relation(fields: [columnId], references: [id], onDelete: SetNull)
   assignedTo User                 @relation("ProjectSubtaskAssignee", fields: [assignedToId], references: [id], onDelete: Cascade)
   reviewer   User?                @relation("ProjectSubtaskReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
-  comments   ProjectTaskComment[]
-  activities ProjectTaskActivity[]
+  comments    ProjectTaskComment[]
+  activities  ProjectTaskActivity[]
   attachments ProjectTaskAttachment[]
+  checklist   ProjectSubtaskChecklistItem[]
 
   @@index([parentTaskId])
   @@index([parentTaskId, order])
@@ -585,6 +590,22 @@ model ProjectSubtask {
   @@index([isCompleted])
   @@index([parentTaskId, isCompleted])
   @@index([assignedToId, isCompleted])
+}
+
+model ProjectSubtaskChecklistItem {
+  id          String   @id @default(uuid())
+  subtaskId   String
+  title       String
+  isCompleted Boolean  @default(false)
+  order       Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  subtask ProjectSubtask @relation(fields: [subtaskId], references: [id], onDelete: Cascade)
+
+  @@index([subtaskId])
+  @@index([subtaskId, order])
+  @@index([subtaskId, isCompleted])
 }
 
 model TaskDependency {

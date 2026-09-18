@@ -306,8 +306,11 @@ export async function getProjectDetail(projectId: string) {
                                 },
                                 orderBy: { createdAt: "desc" },
                             },
+                            checklist: {
+                                orderBy: [{ order: "asc" }, { createdAt: "asc" }],
+                            },
                         },
-                        orderBy: [{ order: "asc" }, { createdAt: "asc" }],
+                        orderBy: [{ order: "asc" }, { createdAt: "desc" }],
                     },
                     reworkLogs: {
                         include: { rejectedBy: true },
@@ -1029,7 +1032,7 @@ export async function createProjectTask(projectId: string, data: any, createdByI
             assignees: { include: { user: true } },
             subtasks: {
                 include: { assignedTo: true, reviewer: true },
-                orderBy: [{ order: "asc" }, { createdAt: "asc" }],
+                orderBy: [{ order: "asc" }, { createdAt: "desc" }],
             },
         },
     });
@@ -1124,7 +1127,7 @@ export async function updateProjectTask(taskId: string, data: any) {
             assignees: { include: { user: true } },
             subtasks: {
                 include: { assignedTo: true, reviewer: true },
-                orderBy: [{ order: "asc" }, { createdAt: "asc" }],
+                orderBy: [{ order: "asc" }, { createdAt: "desc" }],
             },
         },
     });
@@ -1277,12 +1280,12 @@ export async function createProjectSubtask(taskId: string, data: any, actingUser
     if (data.order !== undefined && !isNaN(Number(data.order))) {
         targetOrder = Number(data.order);
     } else {
-        const lastSubtask = await prisma.projectSubtask.findFirst({
+        const minSubtask = await prisma.projectSubtask.findFirst({
             where: { parentTaskId: taskId },
-            orderBy: { order: "desc" },
+            orderBy: { order: "asc" },
             select: { order: true },
         });
-        targetOrder = (lastSubtask?.order ?? -1) + 1;
+        targetOrder = (minSubtask?.order ?? 1) - 1;
     }
 
     const createdSubtask = await prisma.projectSubtask.create({
@@ -1310,6 +1313,9 @@ export async function createProjectSubtask(taskId: string, data: any, actingUser
                     user: { select: { id: true, name: true, fullName: true, avatarUrl: true } },
                 },
                 orderBy: { createdAt: "desc" },
+            },
+            checklist: {
+                orderBy: [{ order: "asc" }, { createdAt: "asc" }],
             },
         },
     });
@@ -1450,6 +1456,9 @@ export async function updateProjectSubtask(subtaskId: string, data: any, actingU
                 },
                 orderBy: { createdAt: "desc" },
             },
+            checklist: {
+                orderBy: [{ order: "asc" }, { createdAt: "asc" }],
+            },
         },
     });
 }
@@ -1574,6 +1583,173 @@ export async function deleteProjectSubtask(subtaskId: string, actingUserId?: str
     });
 }
 
+export async function createSubtaskChecklist(
+    subtaskId: string,
+    title: string,
+    actingUserId?: string
+) {
+    const subtask = await prisma.projectSubtask.findUnique({
+        where: { id: subtaskId },
+        include: {
+            parentTask: {
+                include: {
+                    project: { include: { members: true } },
+                },
+            },
+        },
+    });
+    if (!subtask) throw new Error("Subtask not found.");
+
+    if (actingUserId) {
+        const isManager = subtask.parentTask.project.managerId === actingUserId;
+        const isProjectLeader = subtask.parentTask.project.members.some(
+            (m) => m.userId === actingUserId && (m.role === "LEADER" || m.role === "MANAGER")
+        );
+        const isSubtaskAssignee = subtask.assignedToId === actingUserId;
+        if (!isManager && !isProjectLeader && !isSubtaskAssignee) {
+            throw new Error("Access denied. You can only add checklist items to subtasks assigned to you.");
+        }
+    }
+
+    const lastItem = await prisma.projectSubtaskChecklistItem.findFirst({
+        where: { subtaskId },
+        orderBy: { order: "desc" },
+        select: { order: true },
+    });
+    const nextOrder = (lastItem?.order ?? -1) + 1;
+
+    const item = await prisma.projectSubtaskChecklistItem.create({
+        data: {
+            subtaskId,
+            title: title.trim(),
+            isCompleted: false,
+            order: nextOrder,
+        },
+    });
+
+    return item;
+}
+
+export async function updateSubtaskChecklist(
+    itemId: string,
+    data: { isCompleted?: boolean; title?: string },
+    actingUserId?: string
+) {
+    const item = await prisma.projectSubtaskChecklistItem.findUnique({
+        where: { id: itemId },
+        include: {
+            subtask: {
+                include: {
+                    parentTask: {
+                        include: {
+                            project: { include: { members: true } },
+                        },
+                    },
+                },
+            },
+        },
+    });
+    if (!item) throw new Error("Checklist item not found.");
+
+    if (actingUserId) {
+        const isManager = item.subtask.parentTask.project.managerId === actingUserId;
+        const isProjectLeader = item.subtask.parentTask.project.members.some(
+            (m) => m.userId === actingUserId && (m.role === "LEADER" || m.role === "MANAGER")
+        );
+        const isSubtaskAssignee = item.subtask.assignedToId === actingUserId;
+        if (!isManager && !isProjectLeader && !isSubtaskAssignee) {
+            throw new Error("Access denied. You can only update checklist items on subtasks assigned to you.");
+        }
+    }
+
+    const updateData: any = {};
+    if (data.isCompleted !== undefined) updateData.isCompleted = Boolean(data.isCompleted);
+    if (data.title !== undefined) updateData.title = data.title.trim();
+
+    return await prisma.projectSubtaskChecklistItem.update({
+        where: { id: itemId },
+        data: updateData,
+    });
+}
+
+export async function deleteSubtaskChecklist(
+    itemId: string,
+    actingUserId?: string
+) {
+    const item = await prisma.projectSubtaskChecklistItem.findUnique({
+        where: { id: itemId },
+        include: {
+            subtask: {
+                include: {
+                    parentTask: {
+                        include: {
+                            project: { include: { members: true } },
+                        },
+                    },
+                },
+            },
+        },
+    });
+    if (!item) throw new Error("Checklist item not found.");
+
+    if (actingUserId) {
+        const isManager = item.subtask.parentTask.project.managerId === actingUserId;
+        const isProjectLeader = item.subtask.parentTask.project.members.some(
+            (m) => m.userId === actingUserId && (m.role === "LEADER" || m.role === "MANAGER")
+        );
+        const isSubtaskAssignee = item.subtask.assignedToId === actingUserId;
+        if (!isManager && !isProjectLeader && !isSubtaskAssignee) {
+            throw new Error("Access denied. You can only delete checklist items on subtasks assigned to you.");
+        }
+    }
+
+    await prisma.projectSubtaskChecklistItem.delete({
+        where: { id: itemId },
+    });
+
+    return { message: "Checklist item deleted." };
+}
+
+export async function reorderSubtaskChecklist(
+    subtaskId: string,
+    items: { id: string; order: number }[],
+    actingUserId?: string
+) {
+    if (!Array.isArray(items) || items.length === 0) return [];
+
+    const subtask = await prisma.projectSubtask.findUnique({
+        where: { id: subtaskId },
+        include: {
+            parentTask: {
+                include: {
+                    project: { include: { members: true } },
+                },
+            },
+        },
+    });
+    if (!subtask) throw new Error("Subtask not found.");
+
+    if (actingUserId) {
+        const isManager = subtask.parentTask.project.managerId === actingUserId;
+        const isProjectLeader = subtask.parentTask.project.members.some(
+            (m) => m.userId === actingUserId && (m.role === "LEADER" || m.role === "MANAGER")
+        );
+        const isSubtaskAssignee = subtask.assignedToId === actingUserId;
+        if (!isManager && !isProjectLeader && !isSubtaskAssignee) {
+            throw new Error("Access denied. You can only reorder checklist items on subtasks assigned to you.");
+        }
+    }
+
+    const updates = items.map((item) =>
+        prisma.projectSubtaskChecklistItem.update({
+            where: { id: item.id },
+            data: { order: item.order },
+        })
+    );
+
+    return await prisma.$transaction(updates);
+}
+
 export async function reorderProjectSubtasks(
     taskId: string,
     subtaskOrders: { id: string; order: number; columnId?: string }[]
@@ -1597,7 +1773,7 @@ export async function reorderProjectSubtasks(
     return await prisma.projectSubtask.findMany({
         where: { parentTaskId: taskId },
         include: { assignedTo: true, reviewer: true, column: true },
-        orderBy: [{ order: "asc" }, { createdAt: "asc" }],
+        orderBy: [{ order: "asc" }, { createdAt: "desc" }],
     });
 }
 
@@ -2059,7 +2235,7 @@ function normalizeColumnType(type?: string): "BACKLOG" | "TODO" | "IN_PROGRESS" 
     return "CUSTOM";
 }
 
-export async function createProjectColumn(projectId: string, name: string, type: string = "CUSTOM", isComplete?: boolean) {
+export async function createProjectColumn(projectId: string, name: string, type: string = "CUSTOM", isComplete?: boolean, weight?: number | null) {
     const existing = await prisma.projectColumn.findFirst({
         where: { projectId, name: { equals: name, mode: "insensitive" } },
     });
@@ -2080,11 +2256,12 @@ export async function createProjectColumn(projectId: string, name: string, type:
             type: normalizeColumnType(type),
             order,
             isComplete: !!isComplete,
+            weight: weight !== undefined ? (weight === null ? null : Number(weight)) : null,
         },
     });
 }
 
-export async function updateProjectColumn(columnId: string, name?: string, type?: string, isComplete?: boolean) {
+export async function updateProjectColumn(columnId: string, name?: string, type?: string, isComplete?: boolean, weight?: number | null) {
     const col = await prisma.projectColumn.findUnique({ where: { id: columnId } });
     if (!col) throw new Error("Column not found.");
 
@@ -2107,6 +2284,9 @@ export async function updateProjectColumn(columnId: string, name?: string, type?
     }
     if (type !== undefined) {
         updateData.type = normalizeColumnType(type);
+    }
+    if (weight !== undefined) {
+        updateData.weight = weight === null ? null : Math.max(0, Math.min(100, Number(weight)));
     }
 
     return await prisma.projectColumn.update({
@@ -2163,6 +2343,26 @@ export async function reorderProjectColumns(projectId: string, columnOrders: { i
             prisma.projectColumn.update({
                 where: { id: item.id },
                 data: { order: item.order },
+            })
+        )
+    );
+    return await prisma.projectColumn.findMany({
+        where: { projectId },
+        orderBy: { order: "asc" },
+    });
+}
+
+export async function batchUpdateProjectColumnWeights(
+    projectId: string,
+    columnWeights: { id: string; weight: number | null }[]
+) {
+    await prisma.$transaction(
+        columnWeights.map((item) =>
+            prisma.projectColumn.update({
+                where: { id: item.id },
+                data: {
+                    weight: item.weight === null ? null : Math.max(0, Math.min(100, Number(item.weight))),
+                },
             })
         )
     );

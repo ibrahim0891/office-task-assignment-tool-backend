@@ -45,6 +45,10 @@ router.put("/projects/:projectId/tasks/:taskId/subtasks/:subtaskId", resolveProj
 router.delete("/projects/:projectId/tasks/:taskId/subtasks/:subtaskId", resolveProjectAccess, projectsController.deleteSubtask);
 router.post("/projects/:projectId/tasks/:taskId/subtasks/:subtaskId/attachments/upload", resolveProjectAccess, projectsController.uploadSubtaskAttachment);
 router.delete("/projects/:projectId/tasks/:taskId/subtasks/:subtaskId/attachments/:attachmentId", resolveProjectAccess, projectsController.deleteSubtaskAttachment);
+router.post("/projects/:projectId/tasks/:taskId/subtasks/:subtaskId/checklist", resolveProjectAccess, projectsController.createSubtaskChecklist);
+router.put("/projects/:projectId/tasks/:taskId/subtasks/:subtaskId/checklist/reorder", resolveProjectAccess, projectsController.reorderSubtaskChecklist);
+router.put("/projects/:projectId/tasks/:taskId/subtasks/:subtaskId/checklist/:itemId", resolveProjectAccess, projectsController.updateSubtaskChecklist);
+router.delete("/projects/:projectId/tasks/:taskId/subtasks/:subtaskId/checklist/:itemId", resolveProjectAccess, projectsController.deleteSubtaskChecklist);
 
 // Task Dependencies (DAG)
 router.post("/projects/:projectId/dependencies", requireProjectManagerOrLeader, projectsController.createDependency);
@@ -57,6 +61,7 @@ router.post("/projects/:projectId/incidents/:incidentId/reassign", resolveProjec
 // Project Columns (Custom Kanban Columns)
 router.post("/projects/:projectId/columns", requireProjectManagerOrLeader, projectsController.createColumn);
 router.put("/projects/:projectId/columns/reorder", requireProjectManagerOrLeader, projectsController.reorderColumns);
+router.put("/projects/:projectId/columns/weights", requireProjectManagerOrLeader, projectsController.batchUpdateColumnWeights);
 router.put("/projects/:projectId/columns/:columnId", requireProjectManagerOrLeader, projectsController.updateColumn);
 router.delete("/projects/:projectId/columns/:columnId", requireProjectManagerOrLeader, projectsController.deleteColumn);
 

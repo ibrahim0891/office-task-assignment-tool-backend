@@ -109,7 +109,7 @@ export const getTasksList = async (query: any, actingUserId?: string, userRole?:
                 select: { id: true, fullName: true, avatarUrl: true }
             },
             checklist: {
-                orderBy: { createdAt: "asc" },
+                orderBy: [{ order: "asc" }, { createdAt: "asc" }],
             },
             _count: {
                 select: { comments: true, attachments: true },
@@ -126,6 +126,7 @@ export const createTaskItem = async (body: any, isMember: boolean) => {
         description,
         columnId,
         priority,
+        startDate,
         dueDate,
         date,
         estimatedTime,
@@ -147,6 +148,20 @@ export const createTaskItem = async (body: any, isMember: boolean) => {
     }
 
     const { clientToday } = body;
+    const effectiveStartStr =
+        startDate ||
+        date ||
+        (clientToday &&
+        typeof clientToday === "string" &&
+        /^\d{4}-\d{2}-\d{2}$/.test(clientToday)
+            ? clientToday
+            : getLocalDateString(new Date()));
+    const finalStartDate = parseLocalDate(
+        typeof effectiveStartStr === "string"
+            ? effectiveStartStr.split("T")[0]
+            : getLocalDateString(new Date(effectiveStartStr))
+    );
+
     const dateStr =
         date ||
         (clientToday &&
@@ -160,7 +175,7 @@ export const createTaskItem = async (body: any, isMember: boolean) => {
     if (dueDate) {
         const dueStr = typeof dueDate === "string" ? dueDate.split("T")[0] : getLocalDateString(new Date(dueDate));
         finalDueDate = parseLocalDate(dueStr);
-        if (finalDueDate.getTime() < taskDate.getTime()) {
+        if (finalDueDate.getTime() < finalStartDate.getTime()) {
             throw new Error("Due date cannot be earlier than start date.");
         }
     }
@@ -173,9 +188,10 @@ export const createTaskItem = async (body: any, isMember: boolean) => {
             description,
             columnId,
             priority: priority || "MEDIUM",
+            startDate: finalStartDate,
             dueDate: finalDueDate,
             date: taskDate,
-            originalDate: taskDate,
+            originalDate: finalStartDate,
             estimatedTime: estimatedTime ? parseFloat(estimatedTime) : null,
             actualTime: 0,
             assignedToId: finalAssignedToId,
@@ -192,7 +208,7 @@ export const createTaskItem = async (body: any, isMember: boolean) => {
                 select: { id: true, fullName: true, avatarUrl: true }
             },
             checklist: {
-                orderBy: { createdAt: "asc" },
+                orderBy: [{ order: "asc" }, { createdAt: "asc" }],
             },
             _count: {
                 select: { comments: true, attachments: true },
@@ -236,6 +252,7 @@ export const updateTaskItem = async (taskId: string, body: any, actingUserId: st
         description,
         columnId,
         priority,
+        startDate,
         date,
         dueDate,
         estimatedTime,
@@ -257,6 +274,16 @@ export const updateTaskItem = async (taskId: string, body: any, actingUserId: st
     const updateData: any = {};
     const detailsChanges: any = {};
 
+    let targetStartDate: Date | null = task.startDate || task.originalDate || task.date;
+    if (startDate !== undefined) {
+        if (startDate === null || startDate === "") {
+            targetStartDate = null;
+        } else {
+            const startStr = typeof startDate === "string" ? startDate.split("T")[0] : getLocalDateString(new Date(startDate));
+            targetStartDate = parseLocalDate(startStr);
+        }
+    }
+
     let targetDate: Date = task.date;
     if (date !== undefined && date !== null && date !== "") {
         const dateStr = typeof date === "string" ? date.split("T")[0] : getLocalDateString(new Date(date));
@@ -273,8 +300,22 @@ export const updateTaskItem = async (taskId: string, body: any, actingUserId: st
         }
     }
 
-    if (targetDate && targetDueDate && targetDueDate.getTime() < targetDate.getTime()) {
+    const effectiveStartForValidation = targetStartDate || targetDate;
+    if (effectiveStartForValidation && targetDueDate && targetDueDate.getTime() < effectiveStartForValidation.getTime()) {
         throw new Error("Due date cannot be earlier than start date.");
+    }
+
+    if (startDate !== undefined) {
+        const oldStartStr = task.startDate ? getLocalDateString(task.startDate) : (task.originalDate ? getLocalDateString(task.originalDate) : null);
+        const newStartStr = targetStartDate ? getLocalDateString(targetStartDate) : null;
+        if (newStartStr !== oldStartStr) {
+            updateData.startDate = targetStartDate;
+            updateData.originalDate = targetStartDate || targetDate;
+            detailsChanges.startDate = {
+                from: oldStartStr || "None",
+                to: newStartStr || "None",
+            };
+        }
     }
 
     if (date !== undefined && date !== null && date !== "") {
@@ -282,7 +323,9 @@ export const updateTaskItem = async (taskId: string, body: any, actingUserId: st
         const oldDateStr = task.date ? getLocalDateString(task.date) : null;
         if (targetDateStr !== oldDateStr) {
             updateData.date = targetDate;
-            updateData.originalDate = targetDate;
+            if (startDate === undefined && !task.startDate) {
+                updateData.originalDate = targetDate;
+            }
             updateData.carryCount = 0;
             detailsChanges.date = {
                 from: oldDateStr || "None",
@@ -394,7 +437,7 @@ export const updateTaskItem = async (taskId: string, body: any, actingUserId: st
                 select: { id: true, fullName: true, avatarUrl: true }
             },
             checklist: {
-                orderBy: { createdAt: "asc" },
+                orderBy: [{ order: "asc" }, { createdAt: "asc" }],
             },
             _count: {
                 select: { comments: true, attachments: true },
@@ -572,9 +615,29 @@ export const permanentDeleteTaskItem = async (taskId: string) => {
 };
 
 export const createChecklist = async (taskId: string, title: string) => {
-    return prisma.checklistItem.create({
-        data: { taskId, title },
+    const lastItem = await prisma.checklistItem.findFirst({
+        where: { taskId },
+        orderBy: { order: "desc" },
+        select: { order: true },
     });
+    const nextOrder = (lastItem?.order ?? -1) + 1;
+    return prisma.checklistItem.create({
+        data: { taskId, title, order: nextOrder },
+    });
+};
+
+export const reorderChecklist = async (
+    taskId: string,
+    items: { id: string; order: number }[]
+) => {
+    if (!Array.isArray(items) || items.length === 0) return [];
+    const updates = items.map((item) =>
+        prisma.checklistItem.update({
+            where: { id: item.id },
+            data: { order: item.order },
+        })
+    );
+    return await prisma.$transaction(updates);
 };
 
 export const updateChecklist = async (
@@ -957,7 +1020,7 @@ export const getTaskItem = async (taskId: string) => {
         }),
         prisma.checklistItem.findMany({
             where: { taskId },
-            orderBy: { createdAt: "asc" },
+            orderBy: [{ order: "asc" }, { createdAt: "asc" }],
         }),
         prisma.attachment.findMany({
             where: { taskId },
