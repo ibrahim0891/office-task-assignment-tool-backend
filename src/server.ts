@@ -41,6 +41,9 @@ app.get("/health", (req, res) => {
     });
 });
 
+// Public Authentication Routes
+app.use("/api/auth", authRouter);
+
 // Global Authentication Middleware
 app.use(authenticateToken);
 
@@ -48,7 +51,6 @@ app.use(authenticateToken);
 app.use(enforceObserverRole);
 
 // Routes registration
-app.use("/api/auth", authRouter);
 app.use("/api", usersRouter);
 app.use("/api", columnsRouter);
 app.use("/api", tasksRouter);

@@ -59,6 +59,60 @@ export function calculateProjectProgress(tasks: any[] = [], columns: any[] = [])
     return Math.round(sum / tasks.length);
 }
 
+export async function syncMainTaskColumnBasedOnSubtasks(taskId: string): Promise<void> {
+    const task = await prisma.projectTask.findUnique({
+        where: { id: taskId },
+        include: {
+            subtasks: {
+                include: { column: true },
+            },
+            project: {
+                include: {
+                    columns: { orderBy: { order: "asc" } },
+                },
+            },
+        },
+    });
+
+    if (!task || !task.project) return;
+    const columns = task.project.columns || [];
+    if (columns.length === 0) return;
+
+    const columnMap: Record<string, any> = {};
+    columns.forEach((c) => { columnMap[c.id] = c; });
+
+    const progress = calculateTaskProgress(task, columnMap);
+
+    // Pick target column according to progress percentage
+    let targetCol = columns[0];
+    if (progress === 100) {
+        const completedCol = columns.find((c) => c.isComplete || c.type === "COMPLETED" || c.name.toLowerCase().includes("complete") || c.name.toLowerCase().includes("done"));
+        if (completedCol) targetCol = completedCol;
+        else targetCol = columns[columns.length - 1];
+    } else if (progress >= 75) {
+        const reviewCol = columns.find((c) => !c.isComplete && (c.type === "NEED_ATTENTION" || c.name.toLowerCase().includes("review") || c.name.toLowerCase().includes("qa") || c.name.toLowerCase().includes("attention")));
+        if (reviewCol) targetCol = reviewCol;
+        else {
+            const inProgressCol = columns.find((c) => !c.isComplete && (c.type === "IN_PROGRESS" || c.name.toLowerCase().includes("progress") || c.name.toLowerCase().includes("doing")));
+            if (inProgressCol) targetCol = inProgressCol;
+        }
+    } else if (progress >= 25) {
+        const inProgressCol = columns.find((c) => !c.isComplete && (c.type === "IN_PROGRESS" || c.name.toLowerCase().includes("progress") || c.name.toLowerCase().includes("doing")));
+        if (inProgressCol) targetCol = inProgressCol;
+    } else {
+        const todoCol = columns.find((c) => !c.isComplete && (c.type === "TODO" || c.type === "BACKLOG" || c.name.toLowerCase().includes("to do") || c.name.toLowerCase().includes("todo")));
+        if (todoCol) targetCol = todoCol;
+        else targetCol = columns[0];
+    }
+
+    if (targetCol && task.columnId !== targetCol.id) {
+        await prisma.projectTask.update({
+            where: { id: taskId },
+            data: { columnId: targetCol.id },
+        });
+    }
+}
+
 function mapProjectStatus(status: string) {
     switch (status) {
         case "ACTIVE": return "Active";
@@ -262,7 +316,57 @@ export async function getPortfolioSummary(teamId?: string, userId?: string, isWo
 /**
  * Gets complete project details with tasks, subtasks, members, and dependencies
  */
-export async function getProjectDetail(projectId: string) {
+export async function getProjectDetail(
+    projectId: string,
+    filters?: { status?: string; priority?: string; columnId?: string }
+) {
+    const taskWhere: any = {};
+    if (filters?.columnId && filters.columnId !== "ALL") {
+        taskWhere.columnId = filters.columnId;
+    }
+    if (filters?.priority && filters.priority !== "ALL") {
+        taskWhere.priority = filters.priority.toUpperCase();
+    }
+    if (filters?.status && filters.status !== "ALL") {
+        const s = filters.status.toUpperCase();
+        if (s === "COMPLETED" || s === "DONE") {
+            taskWhere.OR = [
+                { column: { isComplete: true } },
+                { column: { type: "COMPLETED" } },
+                { column: { name: { contains: "done", mode: "insensitive" } } },
+                { column: { name: { contains: "completed", mode: "insensitive" } } },
+            ];
+        } else if (s === "IN_PROGRESS" || s === "PROGRESS") {
+            taskWhere.column = {
+                OR: [
+                    { type: "IN_PROGRESS" },
+                    { name: { contains: "progress", mode: "insensitive" } },
+                ],
+            };
+        } else if (s === "UNDER_REVIEW" || s === "REVIEW") {
+            taskWhere.column = {
+                OR: [
+                    { type: "NEED_ATTENTION" },
+                    { name: { contains: "review", mode: "insensitive" } },
+                ],
+            };
+        } else if (s === "TODO" || s === "TO_DO") {
+            taskWhere.column = {
+                OR: [
+                    { type: "TODO" },
+                    { type: "BACKLOG" },
+                    { name: { contains: "to do", mode: "insensitive" } },
+                    { name: { contains: "todo", mode: "insensitive" } },
+                ],
+            };
+        } else {
+            taskWhere.OR = [
+                { columnId: filters.status },
+                { column: { name: { equals: filters.status, mode: "insensitive" } } },
+            ];
+        }
+    }
+
     const project = await prisma.project.findUnique({
         where: { id: projectId },
         include: {
@@ -277,9 +381,19 @@ export async function getProjectDetail(projectId: string) {
             columns: {
                 orderBy: { order: "asc" },
             },
+            taskFolders: {
+                include: {
+                    _count: {
+                        select: { tasks: true },
+                    },
+                },
+                orderBy: { order: "asc" },
+            },
             tasks: {
+                where: Object.keys(taskWhere).length > 0 ? taskWhere : undefined,
                 include: {
                     column: true,
+                    folder: true,
                     createdBy: true,
                     reviewer: true,
                     assignees: { include: { user: true } },
@@ -935,6 +1049,7 @@ export async function createProjectTask(projectId: string, data: any, createdByI
         title,
         description,
         columnId,
+        folderId,
         startDate,
         dueDate,
         estimatedDays,
@@ -996,6 +1111,7 @@ export async function createProjectTask(projectId: string, data: any, createdByI
         data: {
             projectId,
             columnId,
+            folderId: folderId && folderId !== "none" && folderId !== "null" ? folderId : null,
             title: title.trim(),
             description: description ? description.trim() : "",
             startDate: sDate,
@@ -1027,6 +1143,7 @@ export async function createProjectTask(projectId: string, data: any, createdByI
         },
         include: {
             column: true,
+            folder: true,
             createdBy: true,
             reviewer: true,
             assignees: { include: { user: true } },
@@ -1091,10 +1208,16 @@ export async function updateProjectTask(taskId: string, data: any) {
         }
     }
 
+    const subtasksCount = await prisma.projectSubtask.count({ where: { parentTaskId: taskId } });
+
     const updateData: any = {};
     if (data.title !== undefined) updateData.title = data.title;
     if (data.description !== undefined) updateData.description = data.description;
-    if (data.columnId !== undefined) updateData.columnId = data.columnId;
+    // Only allow setting columnId manually if there are NO subtasks.
+    // If subtasks exist, main task status is dynamic based on subtask completion percentage.
+    if (data.columnId !== undefined && subtasksCount === 0) {
+        updateData.columnId = data.columnId;
+    }
     if (data.startDate !== undefined) updateData.startDate = new Date(data.startDate);
     if (data.dueDate !== undefined) updateData.dueDate = new Date(data.dueDate);
     if (data.estimatedDays !== undefined) updateData.estimatedDays = Number(data.estimatedDays);
@@ -1105,6 +1228,9 @@ export async function updateProjectTask(taskId: string, data: any) {
     if (data.blockerCategory !== undefined) updateData.blockerCategory = data.blockerCategory;
     if (data.blockerReason !== undefined) updateData.blockerReason = data.blockerReason;
     if (data.reviewerId !== undefined) updateData.reviewerId = data.reviewerId || null;
+    if (data.folderId !== undefined) {
+        updateData.folderId = data.folderId && data.folderId !== "none" && data.folderId !== "null" ? data.folderId : null;
+    }
 
     if (data.assigneeIds && Array.isArray(data.assigneeIds)) {
         await prisma.projectTaskAssignee.deleteMany({ where: { taskId } });
@@ -1122,6 +1248,7 @@ export async function updateProjectTask(taskId: string, data: any) {
         data: updateData,
         include: {
             column: true,
+            folder: true,
             createdBy: true,
             reviewer: true,
             assignees: { include: { user: true } },
@@ -1330,6 +1457,8 @@ export async function createProjectSubtask(taskId: string, data: any, actingUser
         }).catch((err) => console.error("Failed to create subtask notification:", err));
     }
 
+    await syncMainTaskColumnBasedOnSubtasks(taskId).catch((err) => console.error("Failed to sync main task column:", err));
+
     return createdSubtask;
 }
 
@@ -1443,7 +1572,7 @@ export async function updateProjectSubtask(subtaskId: string, data: any, actingU
         updateData.actualDays = 0;
     }
 
-    return await prisma.projectSubtask.update({
+    const updatedSubtask = await prisma.projectSubtask.update({
         where: { id: subtaskId },
         data: updateData,
         include: {
@@ -1461,6 +1590,14 @@ export async function updateProjectSubtask(subtaskId: string, data: any, actingU
             },
         },
     });
+
+    if (existingSubtask.parentTaskId) {
+        await syncMainTaskColumnBasedOnSubtasks(existingSubtask.parentTaskId).catch((err) =>
+            console.error("Failed to sync main task column:", err)
+        );
+    }
+
+    return updatedSubtask;
 }
 
 export async function uploadProjectSubtaskAttachment(
@@ -1578,9 +1715,19 @@ export async function deleteProjectSubtask(subtaskId: string, actingUserId?: str
         }
     }
 
-    return await prisma.projectSubtask.delete({
+    const parentTaskId = existingSubtask.parentTaskId;
+
+    const deleted = await prisma.projectSubtask.delete({
         where: { id: subtaskId },
     });
+
+    if (parentTaskId) {
+        await syncMainTaskColumnBasedOnSubtasks(parentTaskId).catch((err) =>
+            console.error("Failed to sync main task column:", err)
+        );
+    }
+
+    return deleted;
 }
 
 export async function createSubtaskChecklist(
@@ -1768,6 +1915,10 @@ export async function reorderProjectSubtasks(
                 },
             })
         )
+    );
+
+    await syncMainTaskColumnBasedOnSubtasks(taskId).catch((err) =>
+        console.error("Failed to sync main task column:", err)
     );
 
     return await prisma.projectSubtask.findMany({
@@ -3248,4 +3399,131 @@ export async function deleteProjectLink(
         where: { id: linkId },
     });
 }
+
+// ==========================================
+// PROJECT TASK FOLDERS SERVICE
+// ==========================================
+
+export async function getProjectTaskFolders(projectId: string) {
+    return prisma.projectTaskFolder.findMany({
+        where: { projectId },
+        include: {
+            _count: {
+                select: { tasks: true },
+            },
+        },
+        orderBy: { order: "asc" },
+    });
+}
+
+export async function createProjectTaskFolder(projectId: string, data: { name: string; emoji?: string }) {
+    const { name, emoji = "📁" } = data;
+    if (!name || !name.trim()) {
+        throw new Error("Folder name is required.");
+    }
+
+    const count = await prisma.projectTaskFolder.count({ where: { projectId } });
+
+    return prisma.projectTaskFolder.create({
+        data: {
+            projectId,
+            name: name.trim(),
+            emoji: emoji || "📁",
+            order: count,
+        },
+        include: {
+            _count: {
+                select: { tasks: true },
+            },
+        },
+    });
+}
+
+export async function updateProjectTaskFolder(
+    projectId: string,
+    folderId: string,
+    data: { name?: string; emoji?: string; order?: number }
+) {
+    const folder = await prisma.projectTaskFolder.findFirst({
+        where: { id: folderId, projectId },
+    });
+    if (!folder) throw new Error("Task folder not found.");
+
+    const updateData: any = {};
+    if (data.name !== undefined) {
+        if (!data.name.trim()) throw new Error("Folder name cannot be empty.");
+        updateData.name = data.name.trim();
+    }
+    if (data.emoji !== undefined) updateData.emoji = data.emoji || "📁";
+    if (data.order !== undefined) updateData.order = Number(data.order);
+
+    return prisma.projectTaskFolder.update({
+        where: { id: folderId },
+        data: updateData,
+        include: {
+            _count: {
+                select: { tasks: true },
+            },
+        },
+    });
+}
+
+export async function deleteProjectTaskFolder(projectId: string, folderId: string) {
+    const folder = await prisma.projectTaskFolder.findFirst({
+        where: { id: folderId, projectId },
+    });
+    if (!folder) throw new Error("Task folder not found.");
+
+    // Move all tasks in this folder back to common non-folder space (folderId = null)
+    await prisma.projectTask.updateMany({
+        where: { projectId, folderId },
+        data: { folderId: null },
+    });
+
+    return prisma.projectTaskFolder.delete({
+        where: { id: folderId },
+    });
+}
+
+export async function batchUpdateProjectTasks(
+    projectId: string | undefined,
+    taskIds: string[],
+    data: any
+) {
+    if (!Array.isArray(taskIds) || taskIds.length === 0) {
+        throw new Error("taskIds must be a non-empty array.");
+    }
+
+    const updateData: any = {};
+    if (data.folderId !== undefined) {
+        updateData.folderId = data.folderId && data.folderId !== "none" && data.folderId !== "null" ? data.folderId : null;
+    }
+    if (data.columnId !== undefined) {
+        updateData.columnId = data.columnId;
+    }
+    if (data.priority !== undefined) {
+        updateData.priority = data.priority;
+    }
+    if (data.riskLevel !== undefined) {
+        updateData.riskLevel = data.riskLevel;
+    }
+
+    const whereClause: any = { id: { in: taskIds } };
+    if (projectId) {
+        whereClause.projectId = projectId;
+    }
+
+    const updateResult = await prisma.projectTask.updateMany({
+        where: whereClause,
+        data: updateData,
+    });
+
+    return {
+        success: true,
+        count: updateResult.count,
+        taskIds,
+    };
+}
+
+
 

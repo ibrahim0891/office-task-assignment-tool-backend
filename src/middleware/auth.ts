@@ -8,7 +8,7 @@ export const JWT_SECRET = APP_CONFIG.JWT_SECRET;
 
 export function authenticateToken(req: Request, res: Response, next: NextFunction) {
     // Exclude authentication routes from token validation
-    if (req.path.startsWith("/api/auth/")) {
+    if (req.path.startsWith("/api/auth") || req.path.startsWith("/auth")) {
         return next();
     }
 
@@ -139,7 +139,7 @@ export async function enforceObserverRole(req: Request, res: Response, next: Nex
     if (!["POST", "PUT", "DELETE"].includes(req.method)) {
         return next();
     }
-    if (req.path.startsWith("/api/auth/")) {
+    if (req.path.startsWith("/api/auth") || req.path.startsWith("/auth")) {
         return next();
     }
 

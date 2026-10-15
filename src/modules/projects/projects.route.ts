@@ -34,6 +34,7 @@ router.delete("/projects/:projectId/members/:memberId", requireProjectManagerOrL
 
 // Project Tasks (Super Tasks) - Restricted to Project Managers & Leaders
 router.post("/projects/:projectId/tasks", requireProjectManagerOrLeader, projectsController.createTask);
+router.put("/projects/:projectId/tasks", requireProjectManagerOrLeader, projectsController.updateTask);
 router.put("/projects/:projectId/tasks/:taskId", requireProjectManagerOrLeader, projectsController.updateTask);
 router.delete("/projects/:projectId/tasks/:taskId", requireProjectManagerOrLeader, projectsController.deleteTask);
 router.post("/projects/:projectId/tasks/:taskId/rework", requireProjectManagerOrLeader, projectsController.reworkTask);
@@ -96,5 +97,11 @@ router.get("/projects/:projectId/links", resolveProjectAccess, projectsControlle
 router.post("/projects/:projectId/links", resolveProjectAccess, projectsController.createLink);
 router.put("/projects/:projectId/links/:linkId", resolveProjectAccess, projectsController.updateLink);
 router.delete("/projects/:projectId/links/:linkId", resolveProjectAccess, projectsController.deleteLink);
+
+// Project Task Folders (Main Task Folders)
+router.get("/projects/:projectId/task-folders", resolveProjectAccess, projectsController.getTaskFolders);
+router.post("/projects/:projectId/task-folders", requireProjectManagerOrLeader, projectsController.createTaskFolder);
+router.put("/projects/:projectId/task-folders/:folderId", requireProjectManagerOrLeader, projectsController.updateTaskFolder);
+router.delete("/projects/:projectId/task-folders/:folderId", requireProjectManagerOrLeader, projectsController.deleteTaskFolder);
 
 export default router;

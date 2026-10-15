@@ -33,7 +33,12 @@ export async function getPortfolioSummary(req: Request, res: Response) {
 export async function getProject(req: Request, res: Response) {
     try {
         const { projectId } = req.params;
-        const project = await projectsService.getProjectDetail(projectId);
+        const { status, priority, columnId } = req.query;
+        const project = await projectsService.getProjectDetail(projectId, {
+            status: status as string,
+            priority: priority as string,
+            columnId: columnId as string,
+        });
         sendResponse(res, 200, project);
     } catch (error: any) {
         if (error.message === "Project not found.") {
@@ -313,9 +318,39 @@ export async function createTask(req: Request, res: Response) {
 
 export async function updateTask(req: Request, res: Response) {
     try {
-        const { taskId } = req.params;
+        const { projectId, taskId } = req.params;
         const actingUserId = (req.headers["x-user-id"] as string) || (req as any).user?.id;
-        const task = await projectsService.updateProjectTask(taskId, req.body);
+        const { taskIds, ...data } = req.body;
+
+        // If multiple task IDs are passed in body
+        if (Array.isArray(taskIds) && taskIds.length > 0) {
+            const targetProjectId = projectId || req.body.projectId;
+            const result = await projectsService.batchUpdateProjectTasks(targetProjectId, taskIds, data);
+
+            const project = await prisma.project.findUnique({
+                where: { id: targetProjectId || (req as any).project?.id },
+                select: { teamId: true, id: true },
+            });
+            if (project?.teamId) {
+                notifyTeam(project.teamId, "project_updated", {
+                    projectId: project.id,
+                    taskIds,
+                    action: "task_bulk_update",
+                    actingUserId,
+                    timestamp: Date.now(),
+                });
+            }
+
+            return sendResponse(res, 200, result);
+        }
+
+        // Single task update
+        const targetTaskId = taskId || req.body.taskId;
+        if (!targetTaskId) {
+            return sendResponse(res, 400, { error: "taskId or taskIds is required." });
+        }
+
+        const task = await projectsService.updateProjectTask(targetTaskId, data);
 
         const project = await prisma.project.findUnique({
             where: { id: task.projectId },
@@ -1608,4 +1643,88 @@ export async function deleteLink(req: Request, res: Response) {
         sendResponse(res, 400, { error: error.message });
     }
 }
+
+// ==========================================
+// PROJECT TASK FOLDERS CONTROLLER
+// ==========================================
+
+export async function getTaskFolders(req: Request, res: Response) {
+    try {
+        const { projectId } = req.params;
+        const folders = await projectsService.getProjectTaskFolders(projectId);
+        sendResponse(res, 200, folders);
+    } catch (error: any) {
+        sendResponse(res, 500, { error: error.message });
+    }
+}
+
+export async function createTaskFolder(req: Request, res: Response) {
+    try {
+        const { projectId } = req.params;
+        const userId = (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
+        const folder = await projectsService.createProjectTaskFolder(projectId, req.body);
+
+        const project = (req as any).project || (await prisma.project.findUnique({ where: { id: projectId } }));
+        if (project) {
+            notifyTeam(project.teamId, "project_updated", {
+                projectId,
+                action: "task_folder_created",
+                folderId: folder.id,
+                userId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 201, folder);
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+export async function updateTaskFolder(req: Request, res: Response) {
+    try {
+        const { projectId, folderId } = req.params;
+        const userId = (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
+        const folder = await projectsService.updateProjectTaskFolder(projectId, folderId, req.body);
+
+        const project = (req as any).project || (await prisma.project.findUnique({ where: { id: projectId } }));
+        if (project) {
+            notifyTeam(project.teamId, "project_updated", {
+                projectId,
+                action: "task_folder_updated",
+                folderId: folder.id,
+                userId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 200, folder);
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+export async function deleteTaskFolder(req: Request, res: Response) {
+    try {
+        const { projectId, folderId } = req.params;
+        const userId = (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
+        await projectsService.deleteProjectTaskFolder(projectId, folderId);
+
+        const project = (req as any).project || (await prisma.project.findUnique({ where: { id: projectId } }));
+        if (project) {
+            notifyTeam(project.teamId, "project_updated", {
+                projectId,
+                action: "task_folder_deleted",
+                folderId,
+                userId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 200, { message: "Task folder deleted successfully. Tasks moved to common non-folder space." });
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
 

@@ -410,6 +410,7 @@ model Project {
   categories   ProjectCategory[]
   docs         ProjectDoc[]
   links        ProjectLink[]
+  taskFolders  ProjectTaskFolder[]
 
   @@index([teamId])
   @@index([folderId])
@@ -509,6 +510,7 @@ model ProjectTask {
   reworkCount     Int              @default(0)
   reopenCount     Int              @default(0)
   reviewerId      String?
+  folderId        String?
   createdById     String
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
@@ -516,6 +518,7 @@ model ProjectTask {
   // Relations
   project         Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
   column          ProjectColumn         @relation(fields: [columnId], references: [id], onDelete: Cascade)
+  folder          ProjectTaskFolder?    @relation(fields: [folderId], references: [id], onDelete: SetNull)
   createdBy       User                  @relation("ProjectTaskCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
   reviewer        User?                 @relation("ProjectTaskReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
   assignees       ProjectTaskAssignee[]
@@ -530,6 +533,8 @@ model ProjectTask {
 
   @@index([projectId])
   @@index([columnId])
+  @@index([folderId])
+  @@index([projectId, folderId])
   @@index([createdById])
   @@index([riskLevel])
   @@index([dueDate])
@@ -537,6 +542,22 @@ model ProjectTask {
   @@index([projectId, riskLevel])
   @@index([projectId, dueDate])
   @@index([reviewerId])
+}
+
+model ProjectTaskFolder {
+  id          String        @id @default(uuid())
+  projectId   String
+  name        String
+  emoji       String        @default("📁")
+  order       Int           @default(0)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  project     Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  tasks       ProjectTask[]
+
+  @@index([projectId])
+  @@index([projectId, order])
 }
 
 model ProjectTaskAssignee {
