@@ -41,7 +41,7 @@ app.get("/health", (req, res) => {
     });
 });
 
-// Public Authentication Routes
+//Global public authentication api
 app.use("/api/auth", authRouter);
 
 // Global Authentication Middleware
@@ -86,5 +86,5 @@ httpServer.listen(PORT, async () => {
                 console.error("[SLA Engine] Periodic check error:", err);
             }
         }, 10 * 60 * 1000);
-    } catch (e) {}
+    } catch (e) { }
 });
