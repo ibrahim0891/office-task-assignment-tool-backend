@@ -327,7 +327,20 @@ export async function resolveWorkspaceContext(req: Request, res: Response, next:
     const decoded = (req as any).user;
     if (!decoded) return sendResponse(res, 401, { error: "Authentication required." });
 
+    const allTeams = req.query.allTeams === "true" || req.headers["x-all-teams"] === "true";
     const teamId = await extractTeamId(req);
+
+    if (allTeams) {
+        if (teamId) {
+            const role = await getCachedMembershipRole(decoded.userId, teamId);
+            if (role) {
+                (req as any).userRole = role;
+                (req as any).workspaceTeamId = teamId;
+            }
+        }
+        return next();
+    }
+
     if (!teamId) {
         return sendResponse(res, 400, { error: "Workspace team context is required." });
     }

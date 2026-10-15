@@ -773,18 +773,20 @@ model ProjectAsset {
 
 // 1. User-Created Project Categories
 model ProjectCategory {
-  id          String        @id @default(uuid())
+  id          String           @id @default(uuid())
   projectId   String
   name        String
+  type        ProjectAssetType @default(DOC)
   color       String?
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
 
-  project     Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project     Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
   docs        ProjectDoc[]
   links       ProjectLink[]
 
   @@index([projectId])
+  @@index([projectId, type])
 }
 
 // 2. Project Rich-Text Documents

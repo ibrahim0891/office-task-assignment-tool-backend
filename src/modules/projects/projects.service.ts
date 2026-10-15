@@ -2991,9 +2991,13 @@ export async function togglePinAsset(
 // PROJECT CATEGORIES (DOCS & LINKS)
 // ==========================================
 
-export async function getProjectCategories(projectId: string) {
+export async function getProjectCategories(projectId: string, type?: "DOC" | "LINK") {
+    const where: any = { projectId };
+    if (type) {
+        where.type = type;
+    }
     return prisma.projectCategory.findMany({
-        where: { projectId },
+        where,
         include: {
             _count: {
                 select: { docs: true, links: true },
@@ -3005,17 +3009,20 @@ export async function getProjectCategories(projectId: string) {
 
 export async function createProjectCategory(
     projectId: string,
-    data: { name: string; color?: string }
+    data: { name: string; color?: string; type?: "DOC" | "LINK" }
 ) {
     if (!data.name || !data.name.trim()) {
         throw new Error("Category name is required.");
     }
+
+    const type = data.type === "LINK" ? "LINK" : "DOC";
 
     return prisma.projectCategory.create({
         data: {
             projectId,
             name: data.name.trim(),
             color: data.color ? data.color.trim() : null,
+            type,
         },
         include: {
             _count: {

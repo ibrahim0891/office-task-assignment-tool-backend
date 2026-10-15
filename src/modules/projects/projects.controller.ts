@@ -6,7 +6,8 @@ import { notifyTeam } from "../../config/socket";
 
 export async function getProjects(req: Request, res: Response) {
     try {
-        const teamId = (req.query.teamId as string) || (req.headers["x-team-id"] as string);
+        const allTeams = req.query.allTeams === "true" || req.headers["x-all-teams"] === "true";
+        const teamId = allTeams ? undefined : ((req.query.teamId as string) || (req.headers["x-team-id"] as string));
         const userId = (req.query.userId as string) || (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
         const isWorkspaceLeader = (req as any).userRole === "LEADER" || (req as any).user?.role === "LEADER";
 
@@ -19,7 +20,8 @@ export async function getProjects(req: Request, res: Response) {
 
 export async function getPortfolioSummary(req: Request, res: Response) {
     try {
-        const teamId = (req.query.teamId as string) || (req.headers["x-team-id"] as string);
+        const allTeams = req.query.allTeams === "true" || req.headers["x-all-teams"] === "true";
+        const teamId = allTeams ? undefined : ((req.query.teamId as string) || (req.headers["x-team-id"] as string));
         const userId = (req.query.userId as string) || (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
         const isWorkspaceLeader = (req as any).userRole === "LEADER" || (req as any).user?.role === "LEADER";
 
@@ -1323,7 +1325,8 @@ export async function togglePinAsset(req: Request, res: Response) {
 export async function getCategories(req: Request, res: Response) {
     try {
         const { projectId } = req.params;
-        const categories = await projectsService.getProjectCategories(projectId);
+        const type = req.query.type as "DOC" | "LINK" | undefined;
+        const categories = await projectsService.getProjectCategories(projectId, type);
         sendResponse(res, 200, categories);
     } catch (error: any) {
         sendResponse(res, 500, { error: error.message });

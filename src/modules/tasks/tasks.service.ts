@@ -55,7 +55,9 @@ export const getTasksList = async (query: any, actingUserId?: string, userRole?:
         };
     }
 
-    if (userId) {
+    const isLeader = userRole === "LEADER";
+
+    if (userId && isLeader) {
         whereClause.assignedToId = userId;
     }
 
@@ -66,8 +68,6 @@ export const getTasksList = async (query: any, actingUserId?: string, userRole?:
         ];
     }
 
-    const isLeader = userRole === "LEADER";
-
     let memberFilter = null;
     if (isFetchingArchivedOrDeleted) {
         if (!isLeader && actingUserId) {
@@ -76,7 +76,7 @@ export const getTasksList = async (query: any, actingUserId?: string, userRole?:
             };
         }
     } else {
-        if (userRole === "MEMBER" && actingUserId) {
+        if (!isLeader && actingUserId) {
             memberFilter = {
                 assignedToId: actingUserId
             };
