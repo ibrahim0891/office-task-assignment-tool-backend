@@ -3501,33 +3501,124 @@ export async function batchUpdateProjectTasks(
         throw new Error("taskIds must be a non-empty array.");
     }
 
+    const isUpdatingDates = data.startDate !== undefined || data.dueDate !== undefined;
+
+    if (isUpdatingDates) {
+        // Fetch project bounds for validation
+        let project: any = null;
+        if (projectId) {
+            project = await prisma.project.findUnique({
+                where: { id: projectId },
+                select: { startDate: true, endDate: true },
+            });
+        }
+
+        const newStartStr = data.startDate ? new Date(data.startDate).toISOString().split("T")[0] : null;
+        const newDueStr = data.dueDate ? new Date(data.dueDate).toISOString().split("T")[0] : null;
+        const pStartStr = project?.startDate ? new Date(project.startDate).toISOString().split("T")[0] : null;
+        const pEndStr = project?.endDate ? new Date(project.endDate).toISOString().split("T")[0] : null;
+
+        // Validate against project bounds
+        if (pStartStr && pEndStr) {
+            if (newStartStr) {
+                if (newStartStr < pStartStr)
+                    throw new Error(`Start date (${newStartStr}) cannot be earlier than the project start date (${pStartStr}).`);
+                if (newStartStr > pEndStr)
+                    throw new Error(`Start date (${newStartStr}) cannot be later than the project end date (${pEndStr}).`);
+            }
+            if (newDueStr) {
+                if (newDueStr < pStartStr)
+                    throw new Error(`Due date (${newDueStr}) cannot be earlier than the project start date (${pStartStr}).`);
+                if (newDueStr > pEndStr)
+                    throw new Error(`Due date (${newDueStr}) cannot be later than the project end date (${pEndStr}).`);
+            }
+        }
+
+        // If both new dates are given, cross-check them directly
+        if (newStartStr && newDueStr && newStartStr > newDueStr) {
+            throw new Error("Start date cannot be later than due date.");
+        }
+
+        // If only one side is given, cross-check against each task's existing other side
+        if ((newStartStr && !newDueStr) || (!newStartStr && newDueStr)) {
+            const existingTasks = await prisma.projectTask.findMany({
+                where: { id: { in: taskIds } },
+                select: { id: true, startDate: true, dueDate: true },
+            });
+
+            for (const t of existingTasks) {
+                const effectiveStart = newStartStr ?? (t.startDate ? new Date(t.startDate).toISOString().split("T")[0] : null);
+                const effectiveDue = newDueStr ?? (t.dueDate ? new Date(t.dueDate).toISOString().split("T")[0] : null);
+                if (effectiveStart && effectiveDue && effectiveStart > effectiveDue) {
+                    throw new Error(
+                        `One or more tasks would have a start date (${effectiveStart}) later than their due date (${effectiveDue}). Provide both dates together to avoid conflicts.`
+                    );
+                }
+            }
+        }
+    }
+
+    // Build the update payload for scalar fields
     const updateData: any = {};
     if (data.folderId !== undefined) {
-        updateData.folderId = data.folderId && data.folderId !== "none" && data.folderId !== "null" ? data.folderId : null;
+        updateData.folderId =
+            data.folderId && data.folderId !== "none" && data.folderId !== "null" ? data.folderId : null;
     }
-    if (data.columnId !== undefined) {
-        updateData.columnId = data.columnId;
-    }
-    if (data.priority !== undefined) {
-        updateData.priority = data.priority;
-    }
-    if (data.riskLevel !== undefined) {
-        updateData.riskLevel = data.riskLevel;
+    if (data.priority !== undefined) updateData.priority = data.priority;
+    if (data.riskLevel !== undefined) updateData.riskLevel = data.riskLevel;
+    if (data.startDate !== undefined) updateData.startDate = new Date(data.startDate);
+    if (data.dueDate !== undefined) updateData.dueDate = new Date(data.dueDate);
+
+    const isUpdatingAssignees =
+        Array.isArray(data.assigneeIds) &&
+        data.assigneeIds.length > 0 &&
+        (data.assignMode === "assign" || data.assignMode === "unassign");
+
+    if (Object.keys(updateData).length === 0 && !isUpdatingAssignees) {
+        throw new Error("No updatable fields provided.");
     }
 
     const whereClause: any = { id: { in: taskIds } };
-    if (projectId) {
-        whereClause.projectId = projectId;
-    }
+    if (projectId) whereClause.projectId = projectId;
 
-    const updateResult = await prisma.projectTask.updateMany({
-        where: whereClause,
-        data: updateData,
+    // Run scalar updates + assignee mutations in a single transaction
+    await prisma.$transaction(async (tx) => {
+        // 1. Scalar field updates (dates, priority, folder, etc.)
+        if (Object.keys(updateData).length > 0) {
+            await tx.projectTask.updateMany({ where: whereClause, data: updateData });
+        }
+
+        // 2. Assignee mutations
+        if (isUpdatingAssignees) {
+            const userIds: string[] = data.assigneeIds;
+
+            if (data.assignMode === "assign") {
+                // Add users to every task — skip if already assigned (upsert-like)
+                await tx.projectTaskAssignee.createMany({
+                    data: taskIds.flatMap((taskId) =>
+                        userIds.map((userId) => ({
+                            taskId,
+                            userId,
+                            acceptanceStatus: "ACCEPTED" as const,
+                        }))
+                    ),
+                    skipDuplicates: true,
+                });
+            } else {
+                // Remove chosen users from every selected task
+                await tx.projectTaskAssignee.deleteMany({
+                    where: {
+                        taskId: { in: taskIds },
+                        userId: { in: userIds },
+                    },
+                });
+            }
+        }
     });
 
     return {
         success: true,
-        count: updateResult.count,
+        count: taskIds.length,
         taskIds,
     };
 }
