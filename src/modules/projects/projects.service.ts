@@ -1730,6 +1730,125 @@ export async function deleteProjectSubtask(subtaskId: string, actingUserId?: str
     return deleted;
 }
 
+export async function batchUpdateProjectSubtasks(
+    taskId: string,
+    subtaskIds: string[],
+    data: any,
+    actingUserId?: string
+) {
+    if (!Array.isArray(subtaskIds) || subtaskIds.length === 0) {
+        throw new Error("subtaskIds must be a non-empty array.");
+    }
+
+    const updatingDates = data.startDate !== undefined || data.dueDate !== undefined;
+    const updatingAssignee = data.assignedToId !== undefined;
+
+    if (!updatingDates && !updatingAssignee) {
+        throw new Error("No updatable fields provided. Supply startDate, dueDate, or assignedToId.");
+    }
+
+    // Verify the actor has manager/leader rights (required for bulk changes)
+    if (actingUserId) {
+        const parentTask = await prisma.projectTask.findUnique({
+            where: { id: taskId },
+            include: { project: { include: { members: true } } },
+        });
+        if (!parentTask) throw new Error("Parent task not found.");
+
+        const isManager = parentTask.project.managerId === actingUserId;
+        const isLeader = parentTask.project.members.some(
+            (m) => m.userId === actingUserId && (m.role === "LEADER" || m.role === "MANAGER")
+        );
+        if (!isManager && !isLeader) {
+            throw new Error("Access denied. Only project managers or leaders can bulk-update subtasks.");
+        }
+    }
+
+    // Date validation — done once, not per subtask
+    if (updatingDates) {
+        const parentTask = await prisma.projectTask.findUnique({
+            where: { id: taskId },
+            include: { project: { select: { startDate: true, endDate: true } } },
+        });
+        const pStartStr = parentTask?.project?.startDate
+            ? new Date(parentTask.project.startDate).toISOString().split("T")[0]
+            : null;
+        const pEndStr = parentTask?.project?.endDate
+            ? new Date(parentTask.project.endDate).toISOString().split("T")[0]
+            : null;
+
+        const newStartStr = data.startDate ? new Date(data.startDate).toISOString().split("T")[0] : null;
+        const newDueStr = data.dueDate ? new Date(data.dueDate).toISOString().split("T")[0] : null;
+
+        if (pStartStr && pEndStr) {
+            if (newStartStr && newStartStr < pStartStr)
+                throw new Error(`Start date (${newStartStr}) cannot be earlier than the project start date (${pStartStr}).`);
+            if (newStartStr && newStartStr > pEndStr)
+                throw new Error(`Start date (${newStartStr}) cannot be later than the project end date (${pEndStr}).`);
+            if (newDueStr && newDueStr < pStartStr)
+                throw new Error(`Due date (${newDueStr}) cannot be earlier than the project start date (${pStartStr}).`);
+            if (newDueStr && newDueStr > pEndStr)
+                throw new Error(`Due date (${newDueStr}) cannot be later than the project end date (${pEndStr}).`);
+        }
+
+        if (newStartStr && newDueStr && newStartStr > newDueStr) {
+            throw new Error("Start date cannot be later than due date.");
+        }
+
+        // If only one date is provided, cross-check against the other existing side per subtask
+        if ((newStartStr && !newDueStr) || (!newStartStr && newDueStr)) {
+            const existingSubtasks = await prisma.projectSubtask.findMany({
+                where: { id: { in: subtaskIds }, parentTaskId: taskId },
+                select: { id: true, startDate: true, dueDate: true },
+            });
+            for (const st of existingSubtasks) {
+                const effectiveStart = newStartStr ?? (st.startDate ? new Date(st.startDate).toISOString().split("T")[0] : null);
+                const effectiveDue = newDueStr ?? (st.dueDate ? new Date(st.dueDate).toISOString().split("T")[0] : null);
+                if (effectiveStart && effectiveDue && effectiveStart > effectiveDue) {
+                    throw new Error(
+                        `One or more subtasks would have a start date (${effectiveStart}) later than their due date (${effectiveDue}). Provide both dates together to avoid conflicts.`
+                    );
+                }
+            }
+        }
+    }
+
+    // Build the scalar update payload
+    const updateData: any = {};
+    if (data.startDate !== undefined) updateData.startDate = new Date(data.startDate);
+    if (data.dueDate !== undefined) updateData.dueDate = new Date(data.dueDate);
+    if (updatingAssignee) updateData.assignedToId = data.assignedToId;
+
+    // Recalculate estimatedDays when both dates are provided together
+    if (updateData.startDate && updateData.dueDate) {
+        const startMs = updateData.startDate.getTime();
+        const dueMs = updateData.dueDate.getTime();
+        if (!isNaN(startMs) && !isNaN(dueMs) && dueMs >= startMs) {
+            updateData.estimatedDays = Math.max(1, Math.round((dueMs - startMs) / (1000 * 60 * 60 * 24)) + 1);
+        }
+    }
+
+    // Single bulk DB write — all matching subtasks in one query
+    const result = await prisma.projectSubtask.updateMany({
+        where: {
+            id: { in: subtaskIds },
+            parentTaskId: taskId,
+        },
+        data: updateData,
+    });
+
+    // Sync parent task column once after the bulk update
+    await syncMainTaskColumnBasedOnSubtasks(taskId).catch((err) =>
+        console.error("Failed to sync main task column after bulk subtask update:", err)
+    );
+
+    return {
+        success: true,
+        count: result.count,
+        subtaskIds,
+    };
+}
+
 export async function createSubtaskChecklist(
     subtaskId: string,
     title: string,

@@ -461,6 +461,42 @@ export async function createSubtask(req: Request, res: Response) {
     }
 }
 
+export async function batchUpdateSubtasks(req: Request, res: Response) {
+    try {
+        const { projectId, taskId } = req.params;
+        const actingUserId = (req as any).user?.userId || (req.headers["x-user-id"] as string);
+        const { subtaskIds, ...data } = req.body;
+
+        if (!Array.isArray(subtaskIds) || subtaskIds.length === 0) {
+            return sendResponse(res, 400, { error: "subtaskIds must be a non-empty array." });
+        }
+
+        const result = await projectsService.batchUpdateProjectSubtasks(taskId, subtaskIds, data, actingUserId);
+
+        const project = await prisma.project.findUnique({
+            where: { id: projectId },
+            select: { teamId: true },
+        });
+        if (project?.teamId) {
+            notifyTeam(project.teamId, "project_updated", {
+                projectId,
+                taskId,
+                subtaskIds,
+                action: "subtask_bulk_update",
+                actingUserId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 200, result);
+    } catch (error: any) {
+        if (error.message?.includes("Access denied")) {
+            return sendResponse(res, 403, { error: error.message });
+        }
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
 export async function updateSubtask(req: Request, res: Response) {
     try {
         const { subtaskId } = req.params;

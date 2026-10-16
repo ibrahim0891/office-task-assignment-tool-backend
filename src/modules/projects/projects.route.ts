@@ -42,6 +42,7 @@ router.post("/projects/:projectId/tasks/:taskId/rework", requireProjectManagerOr
 // Subtasks
 router.post("/projects/:projectId/tasks/:taskId/subtasks", resolveProjectAccess, projectsController.createSubtask);
 router.put("/projects/:projectId/tasks/:taskId/subtasks/reorder", resolveProjectAccess, projectsController.reorderSubtasks);
+router.put("/projects/:projectId/tasks/:taskId/subtasks", requireProjectManagerOrLeader, projectsController.batchUpdateSubtasks);
 router.put("/projects/:projectId/tasks/:taskId/subtasks/:subtaskId", resolveProjectAccess, projectsController.updateSubtask);
 router.delete("/projects/:projectId/tasks/:taskId/subtasks/:subtaskId", resolveProjectAccess, projectsController.deleteSubtask);
 router.post("/projects/:projectId/tasks/:taskId/subtasks/:subtaskId/attachments/upload", resolveProjectAccess, projectsController.uploadSubtaskAttachment);
