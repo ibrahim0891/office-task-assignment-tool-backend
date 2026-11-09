@@ -6,7 +6,8 @@ import { notifyTeam } from "../../config/socket";
 
 export async function getProjects(req: Request, res: Response) {
     try {
-        const teamId = (req.query.teamId as string) || (req.headers["x-team-id"] as string);
+        const allTeams = req.query.allTeams === "true" || req.headers["x-all-teams"] === "true";
+        const teamId = allTeams ? undefined : ((req.query.teamId as string) || (req.headers["x-team-id"] as string));
         const userId = (req.query.userId as string) || (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
         const isWorkspaceLeader = (req as any).userRole === "LEADER" || (req as any).user?.role === "LEADER";
 
@@ -19,7 +20,8 @@ export async function getProjects(req: Request, res: Response) {
 
 export async function getPortfolioSummary(req: Request, res: Response) {
     try {
-        const teamId = (req.query.teamId as string) || (req.headers["x-team-id"] as string);
+        const allTeams = req.query.allTeams === "true" || req.headers["x-all-teams"] === "true";
+        const teamId = allTeams ? undefined : ((req.query.teamId as string) || (req.headers["x-team-id"] as string));
         const userId = (req.query.userId as string) || (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
         const isWorkspaceLeader = (req as any).userRole === "LEADER" || (req as any).user?.role === "LEADER";
 
@@ -33,7 +35,12 @@ export async function getPortfolioSummary(req: Request, res: Response) {
 export async function getProject(req: Request, res: Response) {
     try {
         const { projectId } = req.params;
-        const project = await projectsService.getProjectDetail(projectId);
+        const { status, priority, columnId } = req.query;
+        const project = await projectsService.getProjectDetail(projectId, {
+            status: status as string,
+            priority: priority as string,
+            columnId: columnId as string,
+        });
         sendResponse(res, 200, project);
     } catch (error: any) {
         if (error.message === "Project not found.") {
@@ -87,7 +94,75 @@ export async function updateProject(req: Request, res: Response) {
 export async function deleteProject(req: Request, res: Response) {
     try {
         const { projectId } = req.params;
-        const deleted = await projectsService.deleteProject(projectId);
+        const userId = (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
+        const deleted = await projectsService.softDeleteProject(projectId, userId);
+
+        notifyTeam(deleted.teamId, "project_archived", {
+            projectId: deleted.id,
+            timestamp: Date.now(),
+        });
+        notifyTeam(deleted.teamId, "project_updated", {
+            projectId: deleted.id,
+            action: "project_archive",
+            timestamp: Date.now(),
+        });
+
+        sendResponse(res, 200, { message: "Project moved to archive successfully.", project: deleted });
+    } catch (error: any) {
+        const status = error.message?.includes("Only the project manager") ? 403 : 400;
+        sendResponse(res, status, { error: error.message });
+    }
+}
+
+export async function getArchivedProjects(req: Request, res: Response) {
+    try {
+        const teamId = (req.query.teamId as string) || (req.headers["x-team-id"] as string);
+        const userId = (req.query.userId as string) || (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
+        const isWorkspaceLeader = (req as any).userRole === "LEADER" || (req as any).user?.role === "LEADER";
+
+        if (!teamId) {
+            return sendResponse(res, 400, { error: "teamId is required." });
+        }
+
+        const projects = await projectsService.getArchivedProjects(teamId, userId, isWorkspaceLeader);
+        sendResponse(res, 200, projects);
+    } catch (error: any) {
+        sendResponse(res, 500, { error: error.message });
+    }
+}
+
+export async function restoreProject(req: Request, res: Response) {
+    try {
+        const { projectId } = req.params;
+        const userId = (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
+        const isWorkspaceLeader = (req as any).userRole === "LEADER" || (req as any).user?.role === "LEADER";
+
+        const restored = await projectsService.restoreProject(projectId, userId, isWorkspaceLeader);
+
+        notifyTeam(restored.teamId, "project_restored", {
+            projectId: restored.id,
+            timestamp: Date.now(),
+        });
+        notifyTeam(restored.teamId, "project_updated", {
+            projectId: restored.id,
+            action: "project_restore",
+            timestamp: Date.now(),
+        });
+
+        sendResponse(res, 200, { message: "Project restored successfully.", project: restored });
+    } catch (error: any) {
+        const status = error.message?.includes("Only the project manager or workspace owner") ? 403 : 400;
+        sendResponse(res, status, { error: error.message });
+    }
+}
+
+export async function permanentlyDeleteProject(req: Request, res: Response) {
+    try {
+        const { projectId } = req.params;
+        const userId = (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
+        const isWorkspaceLeader = (req as any).userRole === "LEADER" || (req as any).user?.role === "LEADER";
+
+        const deleted = await projectsService.permanentlyDeleteProject(projectId, userId, isWorkspaceLeader);
 
         notifyTeam(deleted.teamId, "project_deleted", {
             projectId: deleted.id,
@@ -99,9 +174,10 @@ export async function deleteProject(req: Request, res: Response) {
             timestamp: Date.now(),
         });
 
-        sendResponse(res, 200, { message: "Project deleted successfully." });
+        sendResponse(res, 200, { message: "Project permanently deleted." });
     } catch (error: any) {
-        sendResponse(res, 400, { error: error.message });
+        const status = error.message?.includes("Only the project manager or workspace owner") ? 403 : 400;
+        sendResponse(res, status, { error: error.message });
     }
 }
 
@@ -244,9 +320,39 @@ export async function createTask(req: Request, res: Response) {
 
 export async function updateTask(req: Request, res: Response) {
     try {
-        const { taskId } = req.params;
+        const { projectId, taskId } = req.params;
         const actingUserId = (req.headers["x-user-id"] as string) || (req as any).user?.id;
-        const task = await projectsService.updateProjectTask(taskId, req.body);
+        const { taskIds, ...data } = req.body;
+
+        // If multiple task IDs are passed in body
+        if (Array.isArray(taskIds) && taskIds.length > 0) {
+            const targetProjectId = projectId || req.body.projectId;
+            const result = await projectsService.batchUpdateProjectTasks(targetProjectId, taskIds, data);
+
+            const project = await prisma.project.findUnique({
+                where: { id: targetProjectId || (req as any).project?.id },
+                select: { teamId: true, id: true },
+            });
+            if (project?.teamId) {
+                notifyTeam(project.teamId, "project_updated", {
+                    projectId: project.id,
+                    taskIds,
+                    action: "task_bulk_update",
+                    actingUserId,
+                    timestamp: Date.now(),
+                });
+            }
+
+            return sendResponse(res, 200, result);
+        }
+
+        // Single task update
+        const targetTaskId = taskId || req.body.taskId;
+        if (!targetTaskId) {
+            return sendResponse(res, 400, { error: "taskId or taskIds is required." });
+        }
+
+        const task = await projectsService.updateProjectTask(targetTaskId, data);
 
         const project = await prisma.project.findUnique({
             where: { id: task.projectId },
@@ -355,6 +461,42 @@ export async function createSubtask(req: Request, res: Response) {
     }
 }
 
+export async function batchUpdateSubtasks(req: Request, res: Response) {
+    try {
+        const { projectId, taskId } = req.params;
+        const actingUserId = (req as any).user?.userId || (req.headers["x-user-id"] as string);
+        const { subtaskIds, ...data } = req.body;
+
+        if (!Array.isArray(subtaskIds) || subtaskIds.length === 0) {
+            return sendResponse(res, 400, { error: "subtaskIds must be a non-empty array." });
+        }
+
+        const result = await projectsService.batchUpdateProjectSubtasks(taskId, subtaskIds, data, actingUserId);
+
+        const project = await prisma.project.findUnique({
+            where: { id: projectId },
+            select: { teamId: true },
+        });
+        if (project?.teamId) {
+            notifyTeam(project.teamId, "project_updated", {
+                projectId,
+                taskId,
+                subtaskIds,
+                action: "subtask_bulk_update",
+                actingUserId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 200, result);
+    } catch (error: any) {
+        if (error.message?.includes("Access denied")) {
+            return sendResponse(res, 403, { error: error.message });
+        }
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
 export async function updateSubtask(req: Request, res: Response) {
     try {
         const { subtaskId } = req.params;
@@ -408,6 +550,249 @@ export async function deleteSubtask(req: Request, res: Response) {
         }
 
         sendResponse(res, 200, { message: "Subtask deleted." });
+    } catch (error: any) {
+        if (error.message?.includes("Access denied")) {
+            return sendResponse(res, 403, { error: error.message });
+        }
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+export async function uploadSubtaskAttachment(req: Request, res: Response) {
+    try {
+        const { taskId, subtaskId } = req.params;
+        const { imageBase64, filename, userId } = req.body;
+        const actingUserId = userId || (req as any).user?.userId || (req.headers["x-user-id"] as string);
+
+        if (!imageBase64 || !filename) {
+            return sendResponse(res, 400, { error: "Image data and filename are required." });
+        }
+
+        const attachment = await projectsService.uploadProjectSubtaskAttachment(
+            taskId,
+            subtaskId,
+            imageBase64,
+            filename,
+            actingUserId
+        );
+
+        const existing = await prisma.projectSubtask.findUnique({
+            where: { id: subtaskId },
+            select: { parentTaskId: true, parentTask: { select: { projectId: true, project: { select: { teamId: true } } } } },
+        });
+        if (existing?.parentTask?.project?.teamId) {
+            notifyTeam(existing.parentTask.project.teamId, "project_updated", {
+                projectId: existing.parentTask.projectId,
+                taskId: existing.parentTaskId,
+                subtaskId,
+                action: "subtask_attachment_upload",
+                actingUserId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 201, attachment);
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+export async function deleteSubtaskAttachment(req: Request, res: Response) {
+    try {
+        const { subtaskId, attachmentId } = req.params;
+        const actingUserId = (req as any).user?.userId || (req.headers["x-user-id"] as string);
+
+        const result = await projectsService.deleteProjectSubtaskAttachment(
+            subtaskId,
+            attachmentId,
+            actingUserId
+        );
+
+        const existing = await prisma.projectSubtask.findUnique({
+            where: { id: subtaskId },
+            select: { parentTaskId: true, parentTask: { select: { projectId: true, project: { select: { teamId: true } } } } },
+        });
+        if (existing?.parentTask?.project?.teamId) {
+            notifyTeam(existing.parentTask.project.teamId, "project_updated", {
+                projectId: existing.parentTask.projectId,
+                taskId: existing.parentTaskId,
+                subtaskId,
+                action: "subtask_attachment_delete",
+                actingUserId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 200, result);
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+export async function createSubtaskChecklist(req: Request, res: Response) {
+    try {
+        const { subtaskId } = req.params;
+        const { title } = req.body;
+        const actingUserId = (req as any).user?.userId || (req.headers["x-user-id"] as string);
+
+        if (!title || !title.trim()) {
+            return sendResponse(res, 400, { error: "Checklist item title is required." });
+        }
+
+        const item = await projectsService.createSubtaskChecklist(subtaskId, title, actingUserId);
+
+        const existing = await prisma.projectSubtask.findUnique({
+            where: { id: subtaskId },
+            select: { parentTaskId: true, parentTask: { select: { projectId: true, project: { select: { teamId: true } } } } },
+        });
+        if (existing?.parentTask?.project?.teamId) {
+            notifyTeam(existing.parentTask.project.teamId, "project_updated", {
+                projectId: existing.parentTask.projectId,
+                taskId: existing.parentTaskId,
+                subtaskId,
+                action: "subtask_checklist_create",
+                actingUserId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 201, item);
+    } catch (error: any) {
+        if (error.message?.includes("Access denied")) {
+            return sendResponse(res, 403, { error: error.message });
+        }
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+export async function updateSubtaskChecklist(req: Request, res: Response) {
+    try {
+        const { subtaskId, itemId } = req.params;
+        const { isCompleted, title } = req.body;
+        const actingUserId = (req as any).user?.userId || (req.headers["x-user-id"] as string);
+
+        const item = await projectsService.updateSubtaskChecklist(itemId, { isCompleted, title }, actingUserId);
+
+        const existing = await prisma.projectSubtask.findUnique({
+            where: { id: subtaskId },
+            select: { parentTaskId: true, parentTask: { select: { projectId: true, project: { select: { teamId: true } } } } },
+        });
+        if (existing?.parentTask?.project?.teamId) {
+            notifyTeam(existing.parentTask.project.teamId, "project_updated", {
+                projectId: existing.parentTask.projectId,
+                taskId: existing.parentTaskId,
+                subtaskId,
+                action: "subtask_checklist_update",
+                actingUserId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 200, item);
+    } catch (error: any) {
+        if (error.message?.includes("Access denied")) {
+            return sendResponse(res, 403, { error: error.message });
+        }
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+export async function deleteSubtaskChecklist(req: Request, res: Response) {
+    try {
+        const { subtaskId, itemId } = req.params;
+        const actingUserId = (req as any).user?.userId || (req.headers["x-user-id"] as string);
+
+        const existing = await prisma.projectSubtask.findUnique({
+            where: { id: subtaskId },
+            select: { parentTaskId: true, parentTask: { select: { projectId: true, project: { select: { teamId: true } } } } },
+        });
+
+        const result = await projectsService.deleteSubtaskChecklist(itemId, actingUserId);
+
+        if (existing?.parentTask?.project?.teamId) {
+            notifyTeam(existing.parentTask.project.teamId, "project_updated", {
+                projectId: existing.parentTask.projectId,
+                taskId: existing.parentTaskId,
+                subtaskId,
+                action: "subtask_checklist_delete",
+                actingUserId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 200, result);
+    } catch (error: any) {
+        if (error.message?.includes("Access denied")) {
+            return sendResponse(res, 403, { error: error.message });
+        }
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+export async function reorderSubtaskChecklist(req: Request, res: Response) {
+    try {
+        const { subtaskId } = req.params;
+        const { items } = req.body;
+        const actingUserId = (req as any).user?.userId || (req.headers["x-user-id"] as string);
+
+        if (!Array.isArray(items)) {
+            return sendResponse(res, 400, { error: "items array is required" });
+        }
+
+        await projectsService.reorderSubtaskChecklist(subtaskId, items, actingUserId);
+
+        const existing = await prisma.projectSubtask.findUnique({
+            where: { id: subtaskId },
+            select: { parentTaskId: true, parentTask: { select: { projectId: true, project: { select: { teamId: true } } } } },
+        });
+        if (existing?.parentTask?.project?.teamId) {
+            notifyTeam(existing.parentTask.project.teamId, "project_updated", {
+                projectId: existing.parentTask.projectId,
+                taskId: existing.parentTaskId,
+                subtaskId,
+                action: "subtask_checklist_reordered",
+                actingUserId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 200, { message: "Subtask checklist reordered." });
+    } catch (error: any) {
+        if (error.message?.includes("Access denied")) {
+            return sendResponse(res, 403, { error: error.message });
+        }
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+export async function reorderSubtasks(req: Request, res: Response) {
+    try {
+        const { projectId, taskId } = req.params;
+        const { subtaskOrders } = req.body;
+        const actingUserId = (req as any).user?.userId || (req.headers["x-user-id"] as string);
+
+        if (!Array.isArray(subtaskOrders)) {
+            return sendResponse(res, 400, { error: "subtaskOrders array is required." });
+        }
+
+        const subtasks = await projectsService.reorderProjectSubtasks(taskId, subtaskOrders);
+
+        const project = await prisma.project.findUnique({
+            where: { id: projectId },
+            select: { teamId: true },
+        });
+
+        if (project?.teamId) {
+            notifyTeam(project.teamId, "project_updated", {
+                projectId,
+                taskId,
+                action: "subtask_reorder",
+                actingUserId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 200, subtasks);
     } catch (error: any) {
         if (error.message?.includes("Access denied")) {
             return sendResponse(res, 403, { error: error.message });
@@ -620,16 +1005,17 @@ export async function cancelInvitation(req: Request, res: Response) {
 }
 
 // ----------------------------------------------------
+// ----------------------------------------------------
 // PROJECT COLUMNS
 // ----------------------------------------------------
 
 export async function createColumn(req: Request, res: Response) {
     try {
         const { projectId } = req.params;
-        const { name, type, isComplete } = req.body;
+        const { name, type, isComplete, weight } = req.body;
         if (!name) return sendResponse(res, 400, { error: "Column name is required." });
 
-        const column = await projectsService.createProjectColumn(projectId, name, type, isComplete);
+        const column = await projectsService.createProjectColumn(projectId, name, type, isComplete, weight);
 
         const project = await prisma.project.findUnique({
             where: { id: projectId },
@@ -653,9 +1039,9 @@ export async function createColumn(req: Request, res: Response) {
 export async function updateColumn(req: Request, res: Response) {
     try {
         const { columnId } = req.params;
-        const { name, type, isComplete } = req.body;
+        const { name, type, isComplete, weight } = req.body;
 
-        const column = await projectsService.updateProjectColumn(columnId, name, type, isComplete);
+        const column = await projectsService.updateProjectColumn(columnId, name, type, isComplete, weight);
 
         const project = await prisma.project.findUnique({
             where: { id: column.projectId },
@@ -719,6 +1105,34 @@ export async function reorderColumns(req: Request, res: Response) {
             notifyTeam(project.teamId, "project_updated", {
                 projectId,
                 action: "column_reorder",
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 200, columns);
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+export async function batchUpdateColumnWeights(req: Request, res: Response) {
+    try {
+        const { projectId } = req.params;
+        const { weights } = req.body;
+        if (!Array.isArray(weights)) {
+            return sendResponse(res, 400, { error: "weights array is required." });
+        }
+
+        const columns = await projectsService.batchUpdateProjectColumnWeights(projectId, weights);
+
+        const project = await prisma.project.findUnique({
+            where: { id: projectId },
+            select: { teamId: true },
+        });
+        if (project?.teamId) {
+            notifyTeam(project.teamId, "project_updated", {
+                projectId,
+                action: "column_weights_update",
                 timestamp: Date.now(),
             });
         }
@@ -947,7 +1361,8 @@ export async function togglePinAsset(req: Request, res: Response) {
 export async function getCategories(req: Request, res: Response) {
     try {
         const { projectId } = req.params;
-        const categories = await projectsService.getProjectCategories(projectId);
+        const type = req.query.type as "DOC" | "LINK" | undefined;
+        const categories = await projectsService.getProjectCategories(projectId, type);
         sendResponse(res, 200, categories);
     } catch (error: any) {
         sendResponse(res, 500, { error: error.message });
@@ -1267,4 +1682,88 @@ export async function deleteLink(req: Request, res: Response) {
         sendResponse(res, 400, { error: error.message });
     }
 }
+
+// ==========================================
+// PROJECT TASK FOLDERS CONTROLLER
+// ==========================================
+
+export async function getTaskFolders(req: Request, res: Response) {
+    try {
+        const { projectId } = req.params;
+        const folders = await projectsService.getProjectTaskFolders(projectId);
+        sendResponse(res, 200, folders);
+    } catch (error: any) {
+        sendResponse(res, 500, { error: error.message });
+    }
+}
+
+export async function createTaskFolder(req: Request, res: Response) {
+    try {
+        const { projectId } = req.params;
+        const userId = (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
+        const folder = await projectsService.createProjectTaskFolder(projectId, req.body);
+
+        const project = (req as any).project || (await prisma.project.findUnique({ where: { id: projectId } }));
+        if (project) {
+            notifyTeam(project.teamId, "project_updated", {
+                projectId,
+                action: "task_folder_created",
+                folderId: folder.id,
+                userId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 201, folder);
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+export async function updateTaskFolder(req: Request, res: Response) {
+    try {
+        const { projectId, folderId } = req.params;
+        const userId = (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
+        const folder = await projectsService.updateProjectTaskFolder(projectId, folderId, req.body);
+
+        const project = (req as any).project || (await prisma.project.findUnique({ where: { id: projectId } }));
+        if (project) {
+            notifyTeam(project.teamId, "project_updated", {
+                projectId,
+                action: "task_folder_updated",
+                folderId: folder.id,
+                userId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 200, folder);
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
+export async function deleteTaskFolder(req: Request, res: Response) {
+    try {
+        const { projectId, folderId } = req.params;
+        const userId = (req.headers["x-user-id"] as string) || (req as any).user?.userId || (req as any).user?.id;
+        await projectsService.deleteProjectTaskFolder(projectId, folderId);
+
+        const project = (req as any).project || (await prisma.project.findUnique({ where: { id: projectId } }));
+        if (project) {
+            notifyTeam(project.teamId, "project_updated", {
+                projectId,
+                action: "task_folder_deleted",
+                folderId,
+                userId,
+                timestamp: Date.now(),
+            });
+        }
+
+        sendResponse(res, 200, { message: "Task folder deleted successfully. Tasks moved to common non-folder space." });
+    } catch (error: any) {
+        sendResponse(res, 400, { error: error.message });
+    }
+}
+
 

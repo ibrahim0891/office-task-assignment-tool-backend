@@ -7,6 +7,7 @@ const router = Router();
 // Project Portfolio & Summary (Global / user-scoped across teams)
 router.get("/projects", resolveWorkspaceContext, projectsController.getProjects);
 router.get("/projects/summary", resolveWorkspaceContext, projectsController.getPortfolioSummary);
+router.get("/projects/archived", resolveWorkspaceContext, projectsController.getArchivedProjects);
 
 // Project Invitations (Cross-workspace operations, user-authenticated)
 router.get("/projects/invitations/received", projectsController.getReceivedInvitations);
@@ -22,6 +23,8 @@ router.get("/projects/:projectId", resolveProjectAccess, projectsController.getP
 router.post("/projects", requireLeader, projectsController.createProject);
 router.put("/projects/:projectId", requireProjectManagerOrLeader, projectsController.updateProject);
 router.delete("/projects/:projectId", requireProjectManagerOrLeader, projectsController.deleteProject);
+router.delete("/projects/:projectId/permanent", requireProjectManagerOrLeader, projectsController.permanentlyDeleteProject);
+router.post("/projects/:projectId/restore", requireProjectManagerOrLeader, projectsController.restoreProject);
 router.get("/projects/:projectId/analytics", resolveProjectAccess, projectsController.getProjectAnalytics);
 
 // Project Members
@@ -31,14 +34,23 @@ router.delete("/projects/:projectId/members/:memberId", requireProjectManagerOrL
 
 // Project Tasks (Super Tasks) - Restricted to Project Managers & Leaders
 router.post("/projects/:projectId/tasks", requireProjectManagerOrLeader, projectsController.createTask);
+router.put("/projects/:projectId/tasks", requireProjectManagerOrLeader, projectsController.updateTask);
 router.put("/projects/:projectId/tasks/:taskId", requireProjectManagerOrLeader, projectsController.updateTask);
 router.delete("/projects/:projectId/tasks/:taskId", requireProjectManagerOrLeader, projectsController.deleteTask);
 router.post("/projects/:projectId/tasks/:taskId/rework", requireProjectManagerOrLeader, projectsController.reworkTask);
 
 // Subtasks
 router.post("/projects/:projectId/tasks/:taskId/subtasks", resolveProjectAccess, projectsController.createSubtask);
+router.put("/projects/:projectId/tasks/:taskId/subtasks/reorder", resolveProjectAccess, projectsController.reorderSubtasks);
+router.put("/projects/:projectId/tasks/:taskId/subtasks", requireProjectManagerOrLeader, projectsController.batchUpdateSubtasks);
 router.put("/projects/:projectId/tasks/:taskId/subtasks/:subtaskId", resolveProjectAccess, projectsController.updateSubtask);
 router.delete("/projects/:projectId/tasks/:taskId/subtasks/:subtaskId", resolveProjectAccess, projectsController.deleteSubtask);
+router.post("/projects/:projectId/tasks/:taskId/subtasks/:subtaskId/attachments/upload", resolveProjectAccess, projectsController.uploadSubtaskAttachment);
+router.delete("/projects/:projectId/tasks/:taskId/subtasks/:subtaskId/attachments/:attachmentId", resolveProjectAccess, projectsController.deleteSubtaskAttachment);
+router.post("/projects/:projectId/tasks/:taskId/subtasks/:subtaskId/checklist", resolveProjectAccess, projectsController.createSubtaskChecklist);
+router.put("/projects/:projectId/tasks/:taskId/subtasks/:subtaskId/checklist/reorder", resolveProjectAccess, projectsController.reorderSubtaskChecklist);
+router.put("/projects/:projectId/tasks/:taskId/subtasks/:subtaskId/checklist/:itemId", resolveProjectAccess, projectsController.updateSubtaskChecklist);
+router.delete("/projects/:projectId/tasks/:taskId/subtasks/:subtaskId/checklist/:itemId", resolveProjectAccess, projectsController.deleteSubtaskChecklist);
 
 // Task Dependencies (DAG)
 router.post("/projects/:projectId/dependencies", requireProjectManagerOrLeader, projectsController.createDependency);
@@ -51,6 +63,7 @@ router.post("/projects/:projectId/incidents/:incidentId/reassign", resolveProjec
 // Project Columns (Custom Kanban Columns)
 router.post("/projects/:projectId/columns", requireProjectManagerOrLeader, projectsController.createColumn);
 router.put("/projects/:projectId/columns/reorder", requireProjectManagerOrLeader, projectsController.reorderColumns);
+router.put("/projects/:projectId/columns/weights", requireProjectManagerOrLeader, projectsController.batchUpdateColumnWeights);
 router.put("/projects/:projectId/columns/:columnId", requireProjectManagerOrLeader, projectsController.updateColumn);
 router.delete("/projects/:projectId/columns/:columnId", requireProjectManagerOrLeader, projectsController.deleteColumn);
 
@@ -85,5 +98,11 @@ router.get("/projects/:projectId/links", resolveProjectAccess, projectsControlle
 router.post("/projects/:projectId/links", resolveProjectAccess, projectsController.createLink);
 router.put("/projects/:projectId/links/:linkId", resolveProjectAccess, projectsController.updateLink);
 router.delete("/projects/:projectId/links/:linkId", resolveProjectAccess, projectsController.deleteLink);
+
+// Project Task Folders (Main Task Folders)
+router.get("/projects/:projectId/task-folders", resolveProjectAccess, projectsController.getTaskFolders);
+router.post("/projects/:projectId/task-folders", requireProjectManagerOrLeader, projectsController.createTaskFolder);
+router.put("/projects/:projectId/task-folders/:folderId", requireProjectManagerOrLeader, projectsController.updateTaskFolder);
+router.delete("/projects/:projectId/task-folders/:folderId", requireProjectManagerOrLeader, projectsController.deleteTaskFolder);
 
 export default router;

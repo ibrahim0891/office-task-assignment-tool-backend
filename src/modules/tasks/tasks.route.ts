@@ -17,6 +17,7 @@ router.delete("/tasks/:taskId", requireTaskOwnerOrLeaderOrAssignee, tasksControl
 router.delete("/tasks/:taskId/permanent", requireTaskOwnerOrLeaderOrAssignee, tasksController.permanentDeleteTask);
 router.post("/tasks/:taskId/restore", requireTaskOwnerOrLeaderOrAssignee, tasksController.restoreTask);
 router.post("/tasks/:taskId/checklist", requireTaskOwnerOrLeaderOrAssignee, tasksController.createChecklistItem);
+router.put("/tasks/:taskId/checklist/reorder", requireTaskOwnerOrLeaderOrAssignee, tasksController.reorderChecklistItems);
 router.put("/tasks/:taskId/checklist/:itemId", requireTaskOwnerOrLeaderOrAssignee, tasksController.updateChecklistItem);
 router.delete("/tasks/:taskId/checklist/:itemId", requireTaskOwnerOrLeaderOrAssignee, tasksController.deleteChecklistItem);
 router.get("/tasks/:taskId/activities", requireTaskOwnerOrLeaderOrAssignee, tasksController.getTaskActivities);
