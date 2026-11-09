@@ -1,6 +1,7 @@
 import { prisma } from "../../config/prisma";
 import { createNotification } from "../notifications/notifications.service";
 import { notifyTeam, notifyUser } from "../../config/socket";
+import { deleteFromCloudinary, uploadImageAttachment } from "../../cloudinary";
 import {
     wouldCreateCycle,
     calculateCriticalPath,
@@ -56,6 +57,60 @@ export function calculateProjectProgress(tasks: any[] = [], columns: any[] = [])
     }
     const sum = tasks.reduce((acc, t) => acc + calculateTaskProgress(t, columnMap), 0);
     return Math.round(sum / tasks.length);
+}
+
+export async function syncMainTaskColumnBasedOnSubtasks(taskId: string): Promise<void> {
+    const task = await prisma.projectTask.findUnique({
+        where: { id: taskId },
+        include: {
+            subtasks: {
+                include: { column: true },
+            },
+            project: {
+                include: {
+                    columns: { orderBy: { order: "asc" } },
+                },
+            },
+        },
+    });
+
+    if (!task || !task.project) return;
+    const columns = task.project.columns || [];
+    if (columns.length === 0) return;
+
+    const columnMap: Record<string, any> = {};
+    columns.forEach((c) => { columnMap[c.id] = c; });
+
+    const progress = calculateTaskProgress(task, columnMap);
+
+    // Pick target column according to progress percentage
+    let targetCol = columns[0];
+    if (progress === 100) {
+        const completedCol = columns.find((c) => c.isComplete || c.type === "COMPLETED" || c.name.toLowerCase().includes("complete") || c.name.toLowerCase().includes("done"));
+        if (completedCol) targetCol = completedCol;
+        else targetCol = columns[columns.length - 1];
+    } else if (progress >= 75) {
+        const reviewCol = columns.find((c) => !c.isComplete && (c.type === "NEED_ATTENTION" || c.name.toLowerCase().includes("review") || c.name.toLowerCase().includes("qa") || c.name.toLowerCase().includes("attention")));
+        if (reviewCol) targetCol = reviewCol;
+        else {
+            const inProgressCol = columns.find((c) => !c.isComplete && (c.type === "IN_PROGRESS" || c.name.toLowerCase().includes("progress") || c.name.toLowerCase().includes("doing")));
+            if (inProgressCol) targetCol = inProgressCol;
+        }
+    } else if (progress >= 25) {
+        const inProgressCol = columns.find((c) => !c.isComplete && (c.type === "IN_PROGRESS" || c.name.toLowerCase().includes("progress") || c.name.toLowerCase().includes("doing")));
+        if (inProgressCol) targetCol = inProgressCol;
+    } else {
+        const todoCol = columns.find((c) => !c.isComplete && (c.type === "TODO" || c.type === "BACKLOG" || c.name.toLowerCase().includes("to do") || c.name.toLowerCase().includes("todo")));
+        if (todoCol) targetCol = todoCol;
+        else targetCol = columns[0];
+    }
+
+    if (targetCol && task.columnId !== targetCol.id) {
+        await prisma.projectTask.update({
+            where: { id: taskId },
+            data: { columnId: targetCol.id },
+        });
+    }
 }
 
 function mapProjectStatus(status: string) {
@@ -122,7 +177,7 @@ function mapProjectData(project: any) {
  * Lists all projects for a team with aggregated metrics (filtered by user membership for non-leaders)
  */
 export async function getProjectsList(teamId?: string, userId?: string, isWorkspaceLeader?: boolean) {
-    let whereClause: any = {};
+    let whereClause: any = { isDeleted: false };
 
     if (userId) {
         const ledTeams = await prisma.userTeam.findMany({
@@ -132,6 +187,8 @@ export async function getProjectsList(teamId?: string, userId?: string, isWorksp
         const ledTeamIds = ledTeams.map((t) => t.teamId);
 
         whereClause = {
+            isDeleted: false,
+            ...(teamId ? { teamId } : {}),
             OR: [
                 { managerId: userId },
                 { members: { some: { userId } } },
@@ -139,7 +196,7 @@ export async function getProjectsList(teamId?: string, userId?: string, isWorksp
             ],
         };
     } else if (teamId) {
-        whereClause = { teamId };
+        whereClause = { teamId, isDeleted: false };
     }
 
     const projects = await prisma.project.findMany({
@@ -191,7 +248,7 @@ export async function getProjectsList(teamId?: string, userId?: string, isWorksp
  * Gets portfolio-wide metrics across all projects for a team
  */
 export async function getPortfolioSummary(teamId?: string, userId?: string, isWorkspaceLeader?: boolean) {
-    let whereClause: any = {};
+    let whereClause: any = { isDeleted: false };
 
     if (userId) {
         const ledTeams = await prisma.userTeam.findMany({
@@ -201,6 +258,8 @@ export async function getPortfolioSummary(teamId?: string, userId?: string, isWo
         const ledTeamIds = ledTeams.map((t) => t.teamId);
 
         whereClause = {
+            isDeleted: false,
+            ...(teamId ? { teamId } : {}),
             OR: [
                 { managerId: userId },
                 { members: { some: { userId } } },
@@ -208,7 +267,7 @@ export async function getPortfolioSummary(teamId?: string, userId?: string, isWo
             ],
         };
     } else if (teamId) {
-        whereClause = { teamId };
+        whereClause = { teamId, isDeleted: false };
     }
 
     const projects = await prisma.project.findMany({
@@ -257,7 +316,57 @@ export async function getPortfolioSummary(teamId?: string, userId?: string, isWo
 /**
  * Gets complete project details with tasks, subtasks, members, and dependencies
  */
-export async function getProjectDetail(projectId: string) {
+export async function getProjectDetail(
+    projectId: string,
+    filters?: { status?: string; priority?: string; columnId?: string }
+) {
+    const taskWhere: any = {};
+    if (filters?.columnId && filters.columnId !== "ALL") {
+        taskWhere.columnId = filters.columnId;
+    }
+    if (filters?.priority && filters.priority !== "ALL") {
+        taskWhere.priority = filters.priority.toUpperCase();
+    }
+    if (filters?.status && filters.status !== "ALL") {
+        const s = filters.status.toUpperCase();
+        if (s === "COMPLETED" || s === "DONE") {
+            taskWhere.OR = [
+                { column: { isComplete: true } },
+                { column: { type: "COMPLETED" } },
+                { column: { name: { contains: "done", mode: "insensitive" } } },
+                { column: { name: { contains: "completed", mode: "insensitive" } } },
+            ];
+        } else if (s === "IN_PROGRESS" || s === "PROGRESS") {
+            taskWhere.column = {
+                OR: [
+                    { type: "IN_PROGRESS" },
+                    { name: { contains: "progress", mode: "insensitive" } },
+                ],
+            };
+        } else if (s === "UNDER_REVIEW" || s === "REVIEW") {
+            taskWhere.column = {
+                OR: [
+                    { type: "NEED_ATTENTION" },
+                    { name: { contains: "review", mode: "insensitive" } },
+                ],
+            };
+        } else if (s === "TODO" || s === "TO_DO") {
+            taskWhere.column = {
+                OR: [
+                    { type: "TODO" },
+                    { type: "BACKLOG" },
+                    { name: { contains: "to do", mode: "insensitive" } },
+                    { name: { contains: "todo", mode: "insensitive" } },
+                ],
+            };
+        } else {
+            taskWhere.OR = [
+                { columnId: filters.status },
+                { column: { name: { equals: filters.status, mode: "insensitive" } } },
+            ];
+        }
+    }
+
     const project = await prisma.project.findUnique({
         where: { id: projectId },
         include: {
@@ -272,9 +381,19 @@ export async function getProjectDetail(projectId: string) {
             columns: {
                 orderBy: { order: "asc" },
             },
+            taskFolders: {
+                include: {
+                    _count: {
+                        select: { tasks: true },
+                    },
+                },
+                orderBy: { order: "asc" },
+            },
             tasks: {
+                where: Object.keys(taskWhere).length > 0 ? taskWhere : undefined,
                 include: {
                     column: true,
+                    folder: true,
                     createdBy: true,
                     reviewer: true,
                     assignees: { include: { user: true } },
@@ -295,8 +414,17 @@ export async function getProjectDetail(projectId: string) {
                                 },
                                 orderBy: { createdAt: "desc" },
                             },
+                            attachments: {
+                                include: {
+                                    user: { select: { id: true, name: true, fullName: true, avatarUrl: true } },
+                                },
+                                orderBy: { createdAt: "desc" },
+                            },
+                            checklist: {
+                                orderBy: [{ order: "asc" }, { createdAt: "asc" }],
+                            },
                         },
-                        orderBy: { createdAt: "asc" },
+                        orderBy: [{ order: "asc" }, { createdAt: "desc" }],
                     },
                     reworkLogs: {
                         include: { rejectedBy: true },
@@ -493,12 +621,150 @@ export async function updateProject(projectId: string, data: any) {
 }
 
 /**
- * Deletes a project
+ * Soft deletes a project (moves to archive).
+ * ONLY the project manager can delete the project.
  */
-export async function deleteProject(projectId: string) {
+export async function softDeleteProject(projectId: string, actingUserId: string) {
+    const project = await prisma.project.findUnique({
+        where: { id: projectId },
+        select: { id: true, managerId: true, teamId: true, title: true, isDeleted: true },
+    });
+
+    if (!project) throw new Error("Project not found.");
+    if (project.isDeleted) throw new Error("Project is already archived.");
+
+    if (project.managerId !== actingUserId) {
+        throw new Error("Only the project manager can delete this project.");
+    }
+
+    const updated = await prisma.project.update({
+        where: { id: projectId },
+        data: {
+            isDeleted: true,
+            deletedAt: new Date(),
+            status: "ARCHIVED",
+        },
+    });
+
+    return updated;
+}
+
+/**
+ * Restores a soft-deleted project from archive.
+ * Only the project manager or workspace owner can restore.
+ */
+export async function restoreProject(projectId: string, actingUserId: string, isWorkspaceLeader: boolean) {
+    const project = await prisma.project.findUnique({
+        where: { id: projectId },
+        select: { id: true, managerId: true, teamId: true, title: true, isDeleted: true },
+    });
+
+    if (!project) throw new Error("Project not found.");
+    if (!project.isDeleted) throw new Error("Project is not archived.");
+
+    if (project.managerId !== actingUserId && !isWorkspaceLeader) {
+        throw new Error("Only the project manager or workspace owner can restore this project.");
+    }
+
+    const updated = await prisma.project.update({
+        where: { id: projectId },
+        data: {
+            isDeleted: false,
+            deletedAt: null,
+            status: "ACTIVE",
+        },
+    });
+
+    return updated;
+}
+
+/**
+ * Permanently deletes a project and cascades all related data.
+ * Only the project manager or workspace owner can delete permanently.
+ */
+export async function permanentlyDeleteProject(projectId: string, actingUserId: string, isWorkspaceLeader: boolean) {
+    const project = await prisma.project.findUnique({
+        where: { id: projectId },
+        select: { id: true, managerId: true, teamId: true, title: true, isDeleted: true },
+    });
+
+    if (!project) throw new Error("Project not found.");
+
+    if (project.managerId !== actingUserId && !isWorkspaceLeader) {
+        throw new Error("Only the project manager or workspace owner can permanently delete this project.");
+    }
+
     return await prisma.project.delete({
         where: { id: projectId },
     });
+}
+
+/**
+ * Legacy deleteProject function (soft deletes if actingUserId provided, else hard delete)
+ */
+export async function deleteProject(projectId: string, actingUserId?: string) {
+    if (actingUserId) {
+        return await softDeleteProject(projectId, actingUserId);
+    }
+    return await prisma.project.delete({
+        where: { id: projectId },
+    });
+}
+
+/**
+ * Gets archived (soft-deleted) projects for a workspace.
+ * Visible ONLY to the project manager or the workspace owner.
+ */
+export async function getArchivedProjects(teamId: string, userId: string, isWorkspaceLeader: boolean) {
+    if (!teamId) throw new Error("teamId is required.");
+
+    let whereClause: any = {
+        teamId,
+        isDeleted: true,
+    };
+
+    if (!isWorkspaceLeader) {
+        whereClause.managerId = userId;
+    }
+
+    const projects = await prisma.project.findMany({
+        where: whereClause,
+        include: {
+            team: {
+                select: { id: true, name: true, emoji: true },
+            },
+            manager: true,
+            folder: true,
+            members: {
+                include: { user: true },
+            },
+            columns: {
+                orderBy: { order: "asc" },
+            },
+            tasks: {
+                include: {
+                    column: true,
+                    assignees: { include: { user: true } },
+                    subtasks: true,
+                },
+            },
+        },
+        orderBy: { deletedAt: "desc" },
+    });
+
+    const list = projects.map((p) => {
+        const totalTasks = p.tasks.length;
+        const doneTasks = p.tasks.filter((t) => t.column?.isComplete).length;
+        const progress = calculateProjectProgress(p.tasks, p.columns);
+        return {
+            ...p,
+            progress,
+            totalTasks,
+            doneTasks,
+        };
+    });
+
+    return list.map(mapProjectData);
 }
 
 /**
@@ -783,6 +1049,7 @@ export async function createProjectTask(projectId: string, data: any, createdByI
         title,
         description,
         columnId,
+        folderId,
         startDate,
         dueDate,
         estimatedDays,
@@ -844,6 +1111,7 @@ export async function createProjectTask(projectId: string, data: any, createdByI
         data: {
             projectId,
             columnId,
+            folderId: folderId && folderId !== "none" && folderId !== "null" ? folderId : null,
             title: title.trim(),
             description: description ? description.trim() : "",
             startDate: sDate,
@@ -861,7 +1129,7 @@ export async function createProjectTask(projectId: string, data: any, createdByI
                 })),
             },
             subtasks: {
-                create: subtasks.map((st: any) => ({
+                create: subtasks.map((st: any, idx: number) => ({
                     title: st.title,
                     description: st.description || "",
                     assignedToId: st.assignedToId,
@@ -869,15 +1137,20 @@ export async function createProjectTask(projectId: string, data: any, createdByI
                     dueDate: new Date(st.dueDate || dDate),
                     estimatedDays: st.estimatedDays ? Number(st.estimatedDays) : 1.0,
                     reviewerId: st.reviewerId || null,
+                    order: st.order !== undefined ? Number(st.order) : idx,
                 })),
             },
         },
         include: {
             column: true,
+            folder: true,
             createdBy: true,
             reviewer: true,
             assignees: { include: { user: true } },
-            subtasks: { include: { assignedTo: true, reviewer: true } },
+            subtasks: {
+                include: { assignedTo: true, reviewer: true },
+                orderBy: [{ order: "asc" }, { createdAt: "desc" }],
+            },
         },
     });
 
@@ -935,10 +1208,16 @@ export async function updateProjectTask(taskId: string, data: any) {
         }
     }
 
+    const subtasksCount = await prisma.projectSubtask.count({ where: { parentTaskId: taskId } });
+
     const updateData: any = {};
     if (data.title !== undefined) updateData.title = data.title;
     if (data.description !== undefined) updateData.description = data.description;
-    if (data.columnId !== undefined) updateData.columnId = data.columnId;
+    // Only allow setting columnId manually if there are NO subtasks.
+    // If subtasks exist, main task status is dynamic based on subtask completion percentage.
+    if (data.columnId !== undefined && subtasksCount === 0) {
+        updateData.columnId = data.columnId;
+    }
     if (data.startDate !== undefined) updateData.startDate = new Date(data.startDate);
     if (data.dueDate !== undefined) updateData.dueDate = new Date(data.dueDate);
     if (data.estimatedDays !== undefined) updateData.estimatedDays = Number(data.estimatedDays);
@@ -949,6 +1228,9 @@ export async function updateProjectTask(taskId: string, data: any) {
     if (data.blockerCategory !== undefined) updateData.blockerCategory = data.blockerCategory;
     if (data.blockerReason !== undefined) updateData.blockerReason = data.blockerReason;
     if (data.reviewerId !== undefined) updateData.reviewerId = data.reviewerId || null;
+    if (data.folderId !== undefined) {
+        updateData.folderId = data.folderId && data.folderId !== "none" && data.folderId !== "null" ? data.folderId : null;
+    }
 
     if (data.assigneeIds && Array.isArray(data.assigneeIds)) {
         await prisma.projectTaskAssignee.deleteMany({ where: { taskId } });
@@ -966,10 +1248,14 @@ export async function updateProjectTask(taskId: string, data: any) {
         data: updateData,
         include: {
             column: true,
+            folder: true,
             createdBy: true,
             reviewer: true,
             assignees: { include: { user: true } },
-            subtasks: { include: { assignedTo: true, reviewer: true } },
+            subtasks: {
+                include: { assignedTo: true, reviewer: true },
+                orderBy: [{ order: "asc" }, { createdAt: "desc" }],
+            },
         },
     });
 }
@@ -1079,6 +1365,16 @@ export async function createProjectSubtask(taskId: string, data: any, actingUser
         throw new Error(`Subtask start date (${sStr}) cannot be later than due date (${dStr}).`);
     }
 
+    const projectStartDate = parentTask.project?.startDate ? new Date(parentTask.project.startDate).toISOString().split("T")[0] : null;
+    const projectEndDate = parentTask.project?.endDate ? new Date(parentTask.project.endDate).toISOString().split("T")[0] : null;
+
+    if (projectEndDate && dStr > projectEndDate) {
+        throw new Error(`Subtask due date (${dStr}) cannot exceed project end date (${projectEndDate}).`);
+    }
+    if (projectStartDate && sStr < projectStartDate) {
+        throw new Error(`Subtask start date (${sStr}) cannot precede project start date (${projectStartDate}).`);
+    }
+
     let targetColumnId = data.columnId;
     if (!targetColumnId) {
         const firstCol = await prisma.projectColumn.findFirst({
@@ -1107,6 +1403,18 @@ export async function createProjectSubtask(taskId: string, data: any, actingUser
         }
     }
 
+    let targetOrder = 0;
+    if (data.order !== undefined && !isNaN(Number(data.order))) {
+        targetOrder = Number(data.order);
+    } else {
+        const minSubtask = await prisma.projectSubtask.findFirst({
+            where: { parentTaskId: taskId },
+            orderBy: { order: "asc" },
+            select: { order: true },
+        });
+        targetOrder = (minSubtask?.order ?? 1) - 1;
+    }
+
     const createdSubtask = await prisma.projectSubtask.create({
         data: {
             parentTaskId: taskId,
@@ -1121,8 +1429,22 @@ export async function createProjectSubtask(taskId: string, data: any, actingUser
             actualDays: data.actualDays ? Number(data.actualDays) : 0,
             isCompleted,
             reviewerId: data.reviewerId || null,
+            order: targetOrder,
         },
-        include: { assignedTo: true, reviewer: true, column: true },
+        include: {
+            assignedTo: true,
+            reviewer: true,
+            column: true,
+            attachments: {
+                include: {
+                    user: { select: { id: true, name: true, fullName: true, avatarUrl: true } },
+                },
+                orderBy: { createdAt: "desc" },
+            },
+            checklist: {
+                orderBy: [{ order: "asc" }, { createdAt: "asc" }],
+            },
+        },
     });
 
     if (targetAssigneeId && targetAssigneeId !== actingUserId) {
@@ -1134,6 +1456,8 @@ export async function createProjectSubtask(taskId: string, data: any, actingUser
             teamId: parentTask.project.teamId,
         }).catch((err) => console.error("Failed to create subtask notification:", err));
     }
+
+    await syncMainTaskColumnBasedOnSubtasks(taskId).catch((err) => console.error("Failed to sync main task column:", err));
 
     return createdSubtask;
 }
@@ -1176,6 +1500,7 @@ export async function updateProjectSubtask(subtaskId: string, data: any, actingU
     if (data.description !== undefined) updateData.description = data.description;
     if (data.assignedToId !== undefined) updateData.assignedToId = data.assignedToId;
     if (data.priority !== undefined) updateData.priority = data.priority;
+    if (data.order !== undefined && !isNaN(Number(data.order))) updateData.order = Number(data.order);
     if (data.columnId !== undefined) {
         updateData.columnId = data.columnId;
         const targetCol = await prisma.projectColumn.findUnique({ where: { id: data.columnId } });
@@ -1213,6 +1538,16 @@ export async function updateProjectSubtask(subtaskId: string, data: any, actingU
         if (sStr > dStr) {
             throw new Error(`Subtask start date (${sStr}) cannot be later than due date (${dStr}).`);
         }
+
+        const projectStartDate = existingSubtask.parentTask?.project?.startDate ? new Date(existingSubtask.parentTask.project.startDate).toISOString().split("T")[0] : null;
+        const projectEndDate = existingSubtask.parentTask?.project?.endDate ? new Date(existingSubtask.parentTask.project.endDate).toISOString().split("T")[0] : null;
+
+        if (projectEndDate && dStr > projectEndDate) {
+            throw new Error(`Subtask due date (${dStr}) cannot exceed project end date (${projectEndDate}).`);
+        }
+        if (projectStartDate && sStr < projectStartDate) {
+            throw new Error(`Subtask start date (${sStr}) cannot precede project start date (${projectStartDate}).`);
+        }
     }
 
     if (data.estimatedDays !== undefined && !isNaN(Number(data.estimatedDays))) {
@@ -1237,11 +1572,122 @@ export async function updateProjectSubtask(subtaskId: string, data: any, actingU
         updateData.actualDays = 0;
     }
 
-    return await prisma.projectSubtask.update({
+    const updatedSubtask = await prisma.projectSubtask.update({
         where: { id: subtaskId },
         data: updateData,
-        include: { assignedTo: true, reviewer: true, column: true },
+        include: {
+            assignedTo: true,
+            reviewer: true,
+            column: true,
+            attachments: {
+                include: {
+                    user: { select: { id: true, name: true, fullName: true, avatarUrl: true } },
+                },
+                orderBy: { createdAt: "desc" },
+            },
+            checklist: {
+                orderBy: [{ order: "asc" }, { createdAt: "asc" }],
+            },
+        },
     });
+
+    if (existingSubtask.parentTaskId) {
+        await syncMainTaskColumnBasedOnSubtasks(existingSubtask.parentTaskId).catch((err) =>
+            console.error("Failed to sync main task column:", err)
+        );
+    }
+
+    return updatedSubtask;
+}
+
+export async function uploadProjectSubtaskAttachment(
+    taskId: string,
+    subtaskId: string,
+    imageBase64: string,
+    filename: string,
+    userId: string
+) {
+    const subtask = await prisma.projectSubtask.findUnique({
+        where: { id: subtaskId },
+        include: {
+            parentTask: {
+                include: {
+                    project: { include: { members: true } },
+                },
+            },
+        },
+    });
+    if (!subtask) {
+        throw new Error("Subtask not found.");
+    }
+
+    const imageUrl = await uploadImageAttachment(imageBase64, "project_subtask_attachments");
+
+    const attachment = await prisma.projectTaskAttachment.create({
+        data: {
+            taskId,
+            subtaskId,
+            userId,
+            name: filename,
+            url: imageUrl,
+            type: "IMAGE",
+        },
+        include: {
+            user: { select: { id: true, name: true, fullName: true, avatarUrl: true } },
+        },
+    });
+
+    await prisma.projectTaskActivity.create({
+        data: {
+            taskId,
+            subtaskId,
+            userId,
+            actionType: "ATTACHMENT",
+            details: JSON.stringify({
+                name: attachment.name,
+                url: attachment.url,
+            }),
+        },
+    });
+
+    return attachment;
+}
+
+export async function deleteProjectSubtaskAttachment(
+    subtaskId: string,
+    attachmentId: string,
+    actingUserId?: string
+) {
+    const attachment = await prisma.projectTaskAttachment.findUnique({
+        where: { id: attachmentId },
+    });
+    if (!attachment) {
+        throw new Error("Attachment not found.");
+    }
+
+    if (attachment.url) {
+        await deleteFromCloudinary(attachment.url);
+    }
+
+    await prisma.projectTaskAttachment.delete({
+        where: { id: attachmentId },
+    });
+
+    if (actingUserId && attachment.taskId) {
+        await prisma.projectTaskActivity.create({
+            data: {
+                taskId: attachment.taskId,
+                subtaskId: attachment.subtaskId,
+                userId: actingUserId,
+                actionType: "ATTACHMENT",
+                details: JSON.stringify({
+                    note: `Deleted attachment: ${attachment.name}`,
+                }),
+            },
+        });
+    }
+
+    return { message: "Attachment deleted successfully." };
 }
 
 export async function deleteProjectSubtask(subtaskId: string, actingUserId?: string) {
@@ -1269,8 +1715,335 @@ export async function deleteProjectSubtask(subtaskId: string, actingUserId?: str
         }
     }
 
-    return await prisma.projectSubtask.delete({
+    const parentTaskId = existingSubtask.parentTaskId;
+
+    const deleted = await prisma.projectSubtask.delete({
         where: { id: subtaskId },
+    });
+
+    if (parentTaskId) {
+        await syncMainTaskColumnBasedOnSubtasks(parentTaskId).catch((err) =>
+            console.error("Failed to sync main task column:", err)
+        );
+    }
+
+    return deleted;
+}
+
+export async function batchUpdateProjectSubtasks(
+    taskId: string,
+    subtaskIds: string[],
+    data: any,
+    actingUserId?: string
+) {
+    if (!Array.isArray(subtaskIds) || subtaskIds.length === 0) {
+        throw new Error("subtaskIds must be a non-empty array.");
+    }
+
+    const updatingDates = data.startDate !== undefined || data.dueDate !== undefined;
+    const updatingAssignee = data.assignedToId !== undefined;
+
+    if (!updatingDates && !updatingAssignee) {
+        throw new Error("No updatable fields provided. Supply startDate, dueDate, or assignedToId.");
+    }
+
+    // Verify the actor has manager/leader rights (required for bulk changes)
+    if (actingUserId) {
+        const parentTask = await prisma.projectTask.findUnique({
+            where: { id: taskId },
+            include: { project: { include: { members: true } } },
+        });
+        if (!parentTask) throw new Error("Parent task not found.");
+
+        const isManager = parentTask.project.managerId === actingUserId;
+        const isLeader = parentTask.project.members.some(
+            (m) => m.userId === actingUserId && (m.role === "LEADER" || m.role === "MANAGER")
+        );
+        if (!isManager && !isLeader) {
+            throw new Error("Access denied. Only project managers or leaders can bulk-update subtasks.");
+        }
+    }
+
+    // Date validation — done once, not per subtask
+    if (updatingDates) {
+        const parentTask = await prisma.projectTask.findUnique({
+            where: { id: taskId },
+            include: { project: { select: { startDate: true, endDate: true } } },
+        });
+        const pStartStr = parentTask?.project?.startDate
+            ? new Date(parentTask.project.startDate).toISOString().split("T")[0]
+            : null;
+        const pEndStr = parentTask?.project?.endDate
+            ? new Date(parentTask.project.endDate).toISOString().split("T")[0]
+            : null;
+
+        const newStartStr = data.startDate ? new Date(data.startDate).toISOString().split("T")[0] : null;
+        const newDueStr = data.dueDate ? new Date(data.dueDate).toISOString().split("T")[0] : null;
+
+        if (pStartStr && pEndStr) {
+            if (newStartStr && newStartStr < pStartStr)
+                throw new Error(`Start date (${newStartStr}) cannot be earlier than the project start date (${pStartStr}).`);
+            if (newStartStr && newStartStr > pEndStr)
+                throw new Error(`Start date (${newStartStr}) cannot be later than the project end date (${pEndStr}).`);
+            if (newDueStr && newDueStr < pStartStr)
+                throw new Error(`Due date (${newDueStr}) cannot be earlier than the project start date (${pStartStr}).`);
+            if (newDueStr && newDueStr > pEndStr)
+                throw new Error(`Due date (${newDueStr}) cannot be later than the project end date (${pEndStr}).`);
+        }
+
+        if (newStartStr && newDueStr && newStartStr > newDueStr) {
+            throw new Error("Start date cannot be later than due date.");
+        }
+
+        // If only one date is provided, cross-check against the other existing side per subtask
+        if ((newStartStr && !newDueStr) || (!newStartStr && newDueStr)) {
+            const existingSubtasks = await prisma.projectSubtask.findMany({
+                where: { id: { in: subtaskIds }, parentTaskId: taskId },
+                select: { id: true, startDate: true, dueDate: true },
+            });
+            for (const st of existingSubtasks) {
+                const effectiveStart = newStartStr ?? (st.startDate ? new Date(st.startDate).toISOString().split("T")[0] : null);
+                const effectiveDue = newDueStr ?? (st.dueDate ? new Date(st.dueDate).toISOString().split("T")[0] : null);
+                if (effectiveStart && effectiveDue && effectiveStart > effectiveDue) {
+                    throw new Error(
+                        `One or more subtasks would have a start date (${effectiveStart}) later than their due date (${effectiveDue}). Provide both dates together to avoid conflicts.`
+                    );
+                }
+            }
+        }
+    }
+
+    // Build the scalar update payload
+    const updateData: any = {};
+    if (data.startDate !== undefined) updateData.startDate = new Date(data.startDate);
+    if (data.dueDate !== undefined) updateData.dueDate = new Date(data.dueDate);
+    if (updatingAssignee) updateData.assignedToId = data.assignedToId;
+
+    // Recalculate estimatedDays when both dates are provided together
+    if (updateData.startDate && updateData.dueDate) {
+        const startMs = updateData.startDate.getTime();
+        const dueMs = updateData.dueDate.getTime();
+        if (!isNaN(startMs) && !isNaN(dueMs) && dueMs >= startMs) {
+            updateData.estimatedDays = Math.max(1, Math.round((dueMs - startMs) / (1000 * 60 * 60 * 24)) + 1);
+        }
+    }
+
+    // Single bulk DB write — all matching subtasks in one query
+    const result = await prisma.projectSubtask.updateMany({
+        where: {
+            id: { in: subtaskIds },
+            parentTaskId: taskId,
+        },
+        data: updateData,
+    });
+
+    // Sync parent task column once after the bulk update
+    await syncMainTaskColumnBasedOnSubtasks(taskId).catch((err) =>
+        console.error("Failed to sync main task column after bulk subtask update:", err)
+    );
+
+    return {
+        success: true,
+        count: result.count,
+        subtaskIds,
+    };
+}
+
+export async function createSubtaskChecklist(
+    subtaskId: string,
+    title: string,
+    actingUserId?: string
+) {
+    const subtask = await prisma.projectSubtask.findUnique({
+        where: { id: subtaskId },
+        include: {
+            parentTask: {
+                include: {
+                    project: { include: { members: true } },
+                },
+            },
+        },
+    });
+    if (!subtask) throw new Error("Subtask not found.");
+
+    if (actingUserId) {
+        const isManager = subtask.parentTask.project.managerId === actingUserId;
+        const isProjectLeader = subtask.parentTask.project.members.some(
+            (m) => m.userId === actingUserId && (m.role === "LEADER" || m.role === "MANAGER")
+        );
+        const isSubtaskAssignee = subtask.assignedToId === actingUserId;
+        if (!isManager && !isProjectLeader && !isSubtaskAssignee) {
+            throw new Error("Access denied. You can only add checklist items to subtasks assigned to you.");
+        }
+    }
+
+    const lastItem = await prisma.projectSubtaskChecklistItem.findFirst({
+        where: { subtaskId },
+        orderBy: { order: "desc" },
+        select: { order: true },
+    });
+    const nextOrder = (lastItem?.order ?? -1) + 1;
+
+    const item = await prisma.projectSubtaskChecklistItem.create({
+        data: {
+            subtaskId,
+            title: title.trim(),
+            isCompleted: false,
+            order: nextOrder,
+        },
+    });
+
+    return item;
+}
+
+export async function updateSubtaskChecklist(
+    itemId: string,
+    data: { isCompleted?: boolean; title?: string },
+    actingUserId?: string
+) {
+    const item = await prisma.projectSubtaskChecklistItem.findUnique({
+        where: { id: itemId },
+        include: {
+            subtask: {
+                include: {
+                    parentTask: {
+                        include: {
+                            project: { include: { members: true } },
+                        },
+                    },
+                },
+            },
+        },
+    });
+    if (!item) throw new Error("Checklist item not found.");
+
+    if (actingUserId) {
+        const isManager = item.subtask.parentTask.project.managerId === actingUserId;
+        const isProjectLeader = item.subtask.parentTask.project.members.some(
+            (m) => m.userId === actingUserId && (m.role === "LEADER" || m.role === "MANAGER")
+        );
+        const isSubtaskAssignee = item.subtask.assignedToId === actingUserId;
+        if (!isManager && !isProjectLeader && !isSubtaskAssignee) {
+            throw new Error("Access denied. You can only update checklist items on subtasks assigned to you.");
+        }
+    }
+
+    const updateData: any = {};
+    if (data.isCompleted !== undefined) updateData.isCompleted = Boolean(data.isCompleted);
+    if (data.title !== undefined) updateData.title = data.title.trim();
+
+    return await prisma.projectSubtaskChecklistItem.update({
+        where: { id: itemId },
+        data: updateData,
+    });
+}
+
+export async function deleteSubtaskChecklist(
+    itemId: string,
+    actingUserId?: string
+) {
+    const item = await prisma.projectSubtaskChecklistItem.findUnique({
+        where: { id: itemId },
+        include: {
+            subtask: {
+                include: {
+                    parentTask: {
+                        include: {
+                            project: { include: { members: true } },
+                        },
+                    },
+                },
+            },
+        },
+    });
+    if (!item) throw new Error("Checklist item not found.");
+
+    if (actingUserId) {
+        const isManager = item.subtask.parentTask.project.managerId === actingUserId;
+        const isProjectLeader = item.subtask.parentTask.project.members.some(
+            (m) => m.userId === actingUserId && (m.role === "LEADER" || m.role === "MANAGER")
+        );
+        const isSubtaskAssignee = item.subtask.assignedToId === actingUserId;
+        if (!isManager && !isProjectLeader && !isSubtaskAssignee) {
+            throw new Error("Access denied. You can only delete checklist items on subtasks assigned to you.");
+        }
+    }
+
+    await prisma.projectSubtaskChecklistItem.delete({
+        where: { id: itemId },
+    });
+
+    return { message: "Checklist item deleted." };
+}
+
+export async function reorderSubtaskChecklist(
+    subtaskId: string,
+    items: { id: string; order: number }[],
+    actingUserId?: string
+) {
+    if (!Array.isArray(items) || items.length === 0) return [];
+
+    const subtask = await prisma.projectSubtask.findUnique({
+        where: { id: subtaskId },
+        include: {
+            parentTask: {
+                include: {
+                    project: { include: { members: true } },
+                },
+            },
+        },
+    });
+    if (!subtask) throw new Error("Subtask not found.");
+
+    if (actingUserId) {
+        const isManager = subtask.parentTask.project.managerId === actingUserId;
+        const isProjectLeader = subtask.parentTask.project.members.some(
+            (m) => m.userId === actingUserId && (m.role === "LEADER" || m.role === "MANAGER")
+        );
+        const isSubtaskAssignee = subtask.assignedToId === actingUserId;
+        if (!isManager && !isProjectLeader && !isSubtaskAssignee) {
+            throw new Error("Access denied. You can only reorder checklist items on subtasks assigned to you.");
+        }
+    }
+
+    const updates = items.map((item) =>
+        prisma.projectSubtaskChecklistItem.update({
+            where: { id: item.id },
+            data: { order: item.order },
+        })
+    );
+
+    return await prisma.$transaction(updates);
+}
+
+export async function reorderProjectSubtasks(
+    taskId: string,
+    subtaskOrders: { id: string; order: number; columnId?: string }[]
+) {
+    if (!Array.isArray(subtaskOrders) || subtaskOrders.length === 0) {
+        return [];
+    }
+
+    await prisma.$transaction(
+        subtaskOrders.map((item) =>
+            prisma.projectSubtask.update({
+                where: { id: item.id, parentTaskId: taskId },
+                data: {
+                    order: Number(item.order),
+                    ...(item.columnId ? { columnId: item.columnId } : {}),
+                },
+            })
+        )
+    );
+
+    await syncMainTaskColumnBasedOnSubtasks(taskId).catch((err) =>
+        console.error("Failed to sync main task column:", err)
+    );
+
+    return await prisma.projectSubtask.findMany({
+        where: { parentTaskId: taskId },
+        include: { assignedTo: true, reviewer: true, column: true },
+        orderBy: [{ order: "asc" }, { createdAt: "desc" }],
     });
 }
 
@@ -1721,7 +2494,18 @@ export async function cancelProjectInvitation(invitationId: string, actingUserId
     };
 }
 
-export async function createProjectColumn(projectId: string, name: string, type: string = "CUSTOM", isComplete?: boolean) {
+const VALID_COLUMN_TYPES = ["BACKLOG", "TODO", "IN_PROGRESS", "NEED_ATTENTION", "COMPLETED", "CANCELLED", "CUSTOM"];
+
+function normalizeColumnType(type?: string): "BACKLOG" | "TODO" | "IN_PROGRESS" | "NEED_ATTENTION" | "COMPLETED" | "CANCELLED" | "CUSTOM" {
+    if (!type) return "CUSTOM";
+    const upper = type.toUpperCase();
+    if (upper === "DONE") return "COMPLETED";
+    if (upper === "IN_REVIEW" || upper === "REVIEW") return "NEED_ATTENTION";
+    if (VALID_COLUMN_TYPES.includes(upper)) return upper as any;
+    return "CUSTOM";
+}
+
+export async function createProjectColumn(projectId: string, name: string, type: string = "CUSTOM", isComplete?: boolean, weight?: number | null) {
     const existing = await prisma.projectColumn.findFirst({
         where: { projectId, name: { equals: name, mode: "insensitive" } },
     });
@@ -1739,14 +2523,15 @@ export async function createProjectColumn(projectId: string, name: string, type:
         data: {
             projectId,
             name: name.trim(),
-            type: "CUSTOM",
+            type: normalizeColumnType(type),
             order,
             isComplete: !!isComplete,
+            weight: weight !== undefined ? (weight === null ? null : Number(weight)) : null,
         },
     });
 }
 
-export async function updateProjectColumn(columnId: string, name?: string, type?: string, isComplete?: boolean) {
+export async function updateProjectColumn(columnId: string, name?: string, type?: string, isComplete?: boolean, weight?: number | null) {
     const col = await prisma.projectColumn.findUnique({ where: { id: columnId } });
     if (!col) throw new Error("Column not found.");
 
@@ -1768,7 +2553,10 @@ export async function updateProjectColumn(columnId: string, name?: string, type?
         updateData.isComplete = isComplete;
     }
     if (type !== undefined) {
-        updateData.type = type;
+        updateData.type = normalizeColumnType(type);
+    }
+    if (weight !== undefined) {
+        updateData.weight = weight === null ? null : Math.max(0, Math.min(100, Number(weight)));
     }
 
     return await prisma.projectColumn.update({
@@ -1825,6 +2613,26 @@ export async function reorderProjectColumns(projectId: string, columnOrders: { i
             prisma.projectColumn.update({
                 where: { id: item.id },
                 data: { order: item.order },
+            })
+        )
+    );
+    return await prisma.projectColumn.findMany({
+        where: { projectId },
+        orderBy: { order: "asc" },
+    });
+}
+
+export async function batchUpdateProjectColumnWeights(
+    projectId: string,
+    columnWeights: { id: string; weight: number | null }[]
+) {
+    await prisma.$transaction(
+        columnWeights.map((item) =>
+            prisma.projectColumn.update({
+                where: { id: item.id },
+                data: {
+                    weight: item.weight === null ? null : Math.max(0, Math.min(100, Number(item.weight))),
+                },
             })
         )
     );
@@ -2302,9 +3110,13 @@ export async function togglePinAsset(
 // PROJECT CATEGORIES (DOCS & LINKS)
 // ==========================================
 
-export async function getProjectCategories(projectId: string) {
+export async function getProjectCategories(projectId: string, type?: "DOC" | "LINK") {
+    const where: any = { projectId };
+    if (type) {
+        where.type = type;
+    }
     return prisma.projectCategory.findMany({
-        where: { projectId },
+        where,
         include: {
             _count: {
                 select: { docs: true, links: true },
@@ -2316,17 +3128,20 @@ export async function getProjectCategories(projectId: string) {
 
 export async function createProjectCategory(
     projectId: string,
-    data: { name: string; color?: string }
+    data: { name: string; color?: string; type?: "DOC" | "LINK" }
 ) {
     if (!data.name || !data.name.trim()) {
         throw new Error("Category name is required.");
     }
+
+    const type = data.type === "LINK" ? "LINK" : "DOC";
 
     return prisma.projectCategory.create({
         data: {
             projectId,
             name: data.name.trim(),
             color: data.color ? data.color.trim() : null,
+            type,
         },
         include: {
             _count: {
@@ -2710,4 +3525,222 @@ export async function deleteProjectLink(
         where: { id: linkId },
     });
 }
+
+// ==========================================
+// PROJECT TASK FOLDERS SERVICE
+// ==========================================
+
+export async function getProjectTaskFolders(projectId: string) {
+    return prisma.projectTaskFolder.findMany({
+        where: { projectId },
+        include: {
+            _count: {
+                select: { tasks: true },
+            },
+        },
+        orderBy: { order: "asc" },
+    });
+}
+
+export async function createProjectTaskFolder(projectId: string, data: { name: string; emoji?: string }) {
+    const { name, emoji = "📁" } = data;
+    if (!name || !name.trim()) {
+        throw new Error("Folder name is required.");
+    }
+
+    const count = await prisma.projectTaskFolder.count({ where: { projectId } });
+
+    return prisma.projectTaskFolder.create({
+        data: {
+            projectId,
+            name: name.trim(),
+            emoji: emoji || "📁",
+            order: count,
+        },
+        include: {
+            _count: {
+                select: { tasks: true },
+            },
+        },
+    });
+}
+
+export async function updateProjectTaskFolder(
+    projectId: string,
+    folderId: string,
+    data: { name?: string; emoji?: string; order?: number }
+) {
+    const folder = await prisma.projectTaskFolder.findFirst({
+        where: { id: folderId, projectId },
+    });
+    if (!folder) throw new Error("Task folder not found.");
+
+    const updateData: any = {};
+    if (data.name !== undefined) {
+        if (!data.name.trim()) throw new Error("Folder name cannot be empty.");
+        updateData.name = data.name.trim();
+    }
+    if (data.emoji !== undefined) updateData.emoji = data.emoji || "📁";
+    if (data.order !== undefined) updateData.order = Number(data.order);
+
+    return prisma.projectTaskFolder.update({
+        where: { id: folderId },
+        data: updateData,
+        include: {
+            _count: {
+                select: { tasks: true },
+            },
+        },
+    });
+}
+
+export async function deleteProjectTaskFolder(projectId: string, folderId: string) {
+    const folder = await prisma.projectTaskFolder.findFirst({
+        where: { id: folderId, projectId },
+    });
+    if (!folder) throw new Error("Task folder not found.");
+
+    // Move all tasks in this folder back to common non-folder space (folderId = null)
+    await prisma.projectTask.updateMany({
+        where: { projectId, folderId },
+        data: { folderId: null },
+    });
+
+    return prisma.projectTaskFolder.delete({
+        where: { id: folderId },
+    });
+}
+
+export async function batchUpdateProjectTasks(
+    projectId: string | undefined,
+    taskIds: string[],
+    data: any
+) {
+    if (!Array.isArray(taskIds) || taskIds.length === 0) {
+        throw new Error("taskIds must be a non-empty array.");
+    }
+
+    const isUpdatingDates = data.startDate !== undefined || data.dueDate !== undefined;
+
+    if (isUpdatingDates) {
+        // Fetch project bounds for validation
+        let project: any = null;
+        if (projectId) {
+            project = await prisma.project.findUnique({
+                where: { id: projectId },
+                select: { startDate: true, endDate: true },
+            });
+        }
+
+        const newStartStr = data.startDate ? new Date(data.startDate).toISOString().split("T")[0] : null;
+        const newDueStr = data.dueDate ? new Date(data.dueDate).toISOString().split("T")[0] : null;
+        const pStartStr = project?.startDate ? new Date(project.startDate).toISOString().split("T")[0] : null;
+        const pEndStr = project?.endDate ? new Date(project.endDate).toISOString().split("T")[0] : null;
+
+        // Validate against project bounds
+        if (pStartStr && pEndStr) {
+            if (newStartStr) {
+                if (newStartStr < pStartStr)
+                    throw new Error(`Start date (${newStartStr}) cannot be earlier than the project start date (${pStartStr}).`);
+                if (newStartStr > pEndStr)
+                    throw new Error(`Start date (${newStartStr}) cannot be later than the project end date (${pEndStr}).`);
+            }
+            if (newDueStr) {
+                if (newDueStr < pStartStr)
+                    throw new Error(`Due date (${newDueStr}) cannot be earlier than the project start date (${pStartStr}).`);
+                if (newDueStr > pEndStr)
+                    throw new Error(`Due date (${newDueStr}) cannot be later than the project end date (${pEndStr}).`);
+            }
+        }
+
+        // If both new dates are given, cross-check them directly
+        if (newStartStr && newDueStr && newStartStr > newDueStr) {
+            throw new Error("Start date cannot be later than due date.");
+        }
+
+        // If only one side is given, cross-check against each task's existing other side
+        if ((newStartStr && !newDueStr) || (!newStartStr && newDueStr)) {
+            const existingTasks = await prisma.projectTask.findMany({
+                where: { id: { in: taskIds } },
+                select: { id: true, startDate: true, dueDate: true },
+            });
+
+            for (const t of existingTasks) {
+                const effectiveStart = newStartStr ?? (t.startDate ? new Date(t.startDate).toISOString().split("T")[0] : null);
+                const effectiveDue = newDueStr ?? (t.dueDate ? new Date(t.dueDate).toISOString().split("T")[0] : null);
+                if (effectiveStart && effectiveDue && effectiveStart > effectiveDue) {
+                    throw new Error(
+                        `One or more tasks would have a start date (${effectiveStart}) later than their due date (${effectiveDue}). Provide both dates together to avoid conflicts.`
+                    );
+                }
+            }
+        }
+    }
+
+    // Build the update payload for scalar fields
+    const updateData: any = {};
+    if (data.folderId !== undefined) {
+        updateData.folderId =
+            data.folderId && data.folderId !== "none" && data.folderId !== "null" ? data.folderId : null;
+    }
+    if (data.priority !== undefined) updateData.priority = data.priority;
+    if (data.riskLevel !== undefined) updateData.riskLevel = data.riskLevel;
+    if (data.startDate !== undefined) updateData.startDate = new Date(data.startDate);
+    if (data.dueDate !== undefined) updateData.dueDate = new Date(data.dueDate);
+
+    const isUpdatingAssignees =
+        Array.isArray(data.assigneeIds) &&
+        data.assigneeIds.length > 0 &&
+        (data.assignMode === "assign" || data.assignMode === "unassign");
+
+    if (Object.keys(updateData).length === 0 && !isUpdatingAssignees) {
+        throw new Error("No updatable fields provided.");
+    }
+
+    const whereClause: any = { id: { in: taskIds } };
+    if (projectId) whereClause.projectId = projectId;
+
+    // Run scalar updates + assignee mutations in a single transaction
+    await prisma.$transaction(async (tx) => {
+        // 1. Scalar field updates (dates, priority, folder, etc.)
+        if (Object.keys(updateData).length > 0) {
+            await tx.projectTask.updateMany({ where: whereClause, data: updateData });
+        }
+
+        // 2. Assignee mutations
+        if (isUpdatingAssignees) {
+            const userIds: string[] = data.assigneeIds;
+
+            if (data.assignMode === "assign") {
+                // Add users to every task — skip if already assigned (upsert-like)
+                await tx.projectTaskAssignee.createMany({
+                    data: taskIds.flatMap((taskId) =>
+                        userIds.map((userId) => ({
+                            taskId,
+                            userId,
+                            acceptanceStatus: "ACCEPTED" as const,
+                        }))
+                    ),
+                    skipDuplicates: true,
+                });
+            } else {
+                // Remove chosen users from every selected task
+                await tx.projectTaskAssignee.deleteMany({
+                    where: {
+                        taskId: { in: taskIds },
+                        userId: { in: userIds },
+                    },
+                });
+            }
+        }
+    });
+
+    return {
+        success: true,
+        count: taskIds.length,
+        taskIds,
+    };
+}
+
+
 

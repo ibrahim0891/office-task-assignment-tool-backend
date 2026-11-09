@@ -8,7 +8,7 @@ export const JWT_SECRET = APP_CONFIG.JWT_SECRET;
 
 export function authenticateToken(req: Request, res: Response, next: NextFunction) {
     // Exclude authentication routes from token validation
-    if (req.path.startsWith("/api/auth/")) {
+    if (req.path.startsWith("/api/auth") || req.path.startsWith("/auth")) {
         return next();
     }
 
@@ -89,6 +89,15 @@ async function extractTeamId(req: Request): Promise<string | undefined> {
             teamId = inv.project.teamId;
         }
     }
+    if (!teamId && req.params?.id) {
+        const folder = await prisma.folder.findUnique({
+            where: { id: req.params.id },
+            select: { teamId: true },
+        });
+        if (folder) {
+            teamId = folder.teamId;
+        }
+    }
     return teamId;
 }
 
@@ -130,7 +139,7 @@ export async function enforceObserverRole(req: Request, res: Response, next: Nex
     if (!["POST", "PUT", "DELETE"].includes(req.method)) {
         return next();
     }
-    if (req.path.startsWith("/api/auth/")) {
+    if (req.path.startsWith("/api/auth") || req.path.startsWith("/auth")) {
         return next();
     }
 
@@ -318,7 +327,20 @@ export async function resolveWorkspaceContext(req: Request, res: Response, next:
     const decoded = (req as any).user;
     if (!decoded) return sendResponse(res, 401, { error: "Authentication required." });
 
+    const allTeams = req.query.allTeams === "true" || req.headers["x-all-teams"] === "true";
     const teamId = await extractTeamId(req);
+
+    if (allTeams) {
+        if (teamId) {
+            const role = await getCachedMembershipRole(decoded.userId, teamId);
+            if (role) {
+                (req as any).userRole = role;
+                (req as any).workspaceTeamId = teamId;
+            }
+        }
+        return next();
+    }
+
     if (!teamId) {
         return sendResponse(res, 400, { error: "Workspace team context is required." });
     }
@@ -372,7 +394,7 @@ export async function requireProjectManagerOrLeader(req: Request, res: Response,
         // Check project member role
         const projectMember = project.members.find((m) => m.userId === decoded.userId);
         const isProjectLeader = projectMember && (
-            projectMember.role === "LEADER" ||
+            projectMember.role === "LEADER" || 
             projectMember.role === "MANAGER"
         );
 
