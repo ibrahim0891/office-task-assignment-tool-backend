@@ -111,6 +111,7 @@ model User {
 
   // Project Module Relations
   managedProjects          Project[]             @relation("ProjectManager")
+  createdFolders           Folder[]              @relation("FolderCreator")
   projectMemberships       ProjectMember[]
   createdProjectTasks      ProjectTask[]         @relation("ProjectTaskCreatedBy")
   reviewedProjectTasks     ProjectTask[]         @relation("ProjectTaskReviewer")
@@ -128,6 +129,7 @@ model User {
   createdProjectAssets     ProjectAsset[]        @relation("ProjectAssetCreatedBy")
   createdProjectDocs       ProjectDoc[]          @relation("ProjectDocCreatedBy")
   createdProjectLinks      ProjectLink[]         @relation("ProjectLinkCreatedBy")
+  projectTaskAttachments   ProjectTaskAttachment[] @relation("ProjectTaskAttachmentUser")
 }
 
 model Team {
@@ -189,6 +191,7 @@ model Task {
   description   String?
   columnId      String
   priority      String    @default("MEDIUM") // LOW, MEDIUM, HIGH, URGENT
+  startDate     DateTime?
   dueDate       DateTime?
   date          DateTime // The date this task belongs to (for the calendar view)
   originalDate  DateTime // The date this task was originally scheduled for
@@ -235,12 +238,14 @@ model ChecklistItem {
   taskId      String
   title       String
   isCompleted Boolean  @default(false)
+  order       Int      @default(0)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
 
   @@index([taskId])
+  @@index([taskId, order])
   @@index([taskId, isCompleted])
 }
 
@@ -360,15 +365,18 @@ model PushSubscription {
 model Folder {
   id        String    @id @default(uuid())
   teamId    String
+  creatorId String?
   name      String
   emoji     String    @default("📁")
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 
   team      Team      @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  creator   User?     @relation("FolderCreator", fields: [creatorId], references: [id], onDelete: SetNull)
   projects  Project[]
 
   @@index([teamId])
+  @@index([creatorId])
 }
 
 model Project {
@@ -383,6 +391,8 @@ model Project {
   status      ProjectStatus @default(ACTIVE)
   progress    Float         @default(0) // Percentage 0 - 100
   managerId   String
+  isDeleted   Boolean       @default(false)
+  deletedAt   DateTime?
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 
@@ -400,11 +410,14 @@ model Project {
   categories   ProjectCategory[]
   docs         ProjectDoc[]
   links        ProjectLink[]
+  taskFolders  ProjectTaskFolder[]
 
   @@index([teamId])
   @@index([folderId])
   @@index([managerId])
   @@index([status])
+  @@index([teamId, isDeleted])
+  @@index([managerId, isDeleted])
 }
 
 model ProjectMember {
@@ -467,6 +480,7 @@ model ProjectColumn {
   type       ProjectColumnType @default(CUSTOM)
   order      Int
   isComplete Boolean           @default(false)
+  weight     Float?
   createdAt  DateTime          @default(now())
   updatedAt  DateTime          @updatedAt
 
@@ -496,6 +510,7 @@ model ProjectTask {
   reworkCount     Int              @default(0)
   reopenCount     Int              @default(0)
   reviewerId      String?
+  folderId        String?
   createdById     String
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
@@ -503,6 +518,7 @@ model ProjectTask {
   // Relations
   project         Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
   column          ProjectColumn         @relation(fields: [columnId], references: [id], onDelete: Cascade)
+  folder          ProjectTaskFolder?    @relation(fields: [folderId], references: [id], onDelete: SetNull)
   createdBy       User                  @relation("ProjectTaskCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
   reviewer        User?                 @relation("ProjectTaskReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
   assignees       ProjectTaskAssignee[]
@@ -513,9 +529,12 @@ model ProjectTask {
   incidents       ProjectIncident[]
   comments        ProjectTaskComment[]
   activities      ProjectTaskActivity[]
+  attachments     ProjectTaskAttachment[]
 
   @@index([projectId])
   @@index([columnId])
+  @@index([folderId])
+  @@index([projectId, folderId])
   @@index([createdById])
   @@index([riskLevel])
   @@index([dueDate])
@@ -523,6 +542,22 @@ model ProjectTask {
   @@index([projectId, riskLevel])
   @@index([projectId, dueDate])
   @@index([reviewerId])
+}
+
+model ProjectTaskFolder {
+  id          String        @id @default(uuid())
+  projectId   String
+  name        String
+  emoji       String        @default("📁")
+  order       Int           @default(0)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  project     Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  tasks       ProjectTask[]
+
+  @@index([projectId])
+  @@index([projectId, order])
 }
 
 model ProjectTaskAssignee {
@@ -556,6 +591,7 @@ model ProjectSubtask {
   isCompleted      Boolean              @default(false)
   acceptanceStatus TaskAcceptanceStatus @default(ACCEPTED)
   reviewerId       String?
+  order            Int                  @default(0)
   createdAt        DateTime             @default(now())
   updatedAt        DateTime             @updatedAt
 
@@ -563,15 +599,34 @@ model ProjectSubtask {
   column     ProjectColumn?       @relation(fields: [columnId], references: [id], onDelete: SetNull)
   assignedTo User                 @relation("ProjectSubtaskAssignee", fields: [assignedToId], references: [id], onDelete: Cascade)
   reviewer   User?                @relation("ProjectSubtaskReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
-  comments   ProjectTaskComment[]
-  activities ProjectTaskActivity[]
+  comments    ProjectTaskComment[]
+  activities  ProjectTaskActivity[]
+  attachments ProjectTaskAttachment[]
+  checklist   ProjectSubtaskChecklistItem[]
 
   @@index([parentTaskId])
+  @@index([parentTaskId, order])
   @@index([columnId])
   @@index([assignedToId])
   @@index([isCompleted])
   @@index([parentTaskId, isCompleted])
   @@index([assignedToId, isCompleted])
+}
+
+model ProjectSubtaskChecklistItem {
+  id          String   @id @default(uuid())
+  subtaskId   String
+  title       String
+  isCompleted Boolean  @default(false)
+  order       Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  subtask ProjectSubtask @relation(fields: [subtaskId], references: [id], onDelete: Cascade)
+
+  @@index([subtaskId])
+  @@index([subtaskId, order])
+  @@index([subtaskId, isCompleted])
 }
 
 model TaskDependency {
@@ -718,18 +773,20 @@ model ProjectAsset {
 
 // 1. User-Created Project Categories
 model ProjectCategory {
-  id          String        @id @default(uuid())
+  id          String           @id @default(uuid())
   projectId   String
   name        String
+  type        ProjectAssetType @default(DOC)
   color       String?
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
 
-  project     Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project     Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
   docs        ProjectDoc[]
   links       ProjectLink[]
 
   @@index([projectId])
+  @@index([projectId, type])
 }
 
 // 2. Project Rich-Text Documents
@@ -771,4 +828,24 @@ model ProjectLink {
   @@index([projectId])
   @@index([categoryId])
   @@index([createdById])
+}
+
+// 4. Project Task & Subtask Attachments
+model ProjectTaskAttachment {
+  id        String   @id @default(uuid())
+  taskId    String
+  subtaskId String?
+  userId    String
+  name      String
+  url       String   @db.Text
+  type      String?  @default("IMAGE")
+  createdAt DateTime @default(now())
+
+  task    ProjectTask     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  subtask ProjectSubtask? @relation(fields: [subtaskId], references: [id], onDelete: Cascade)
+  user    User            @relation("ProjectTaskAttachmentUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+  @@index([subtaskId])
+  @@index([userId])
 }

