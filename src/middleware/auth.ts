@@ -372,7 +372,7 @@ export async function requireProjectManagerOrLeader(req: Request, res: Response,
         // Check project member role
         const projectMember = project.members.find((m) => m.userId === decoded.userId);
         const isProjectLeader = projectMember && (
-            projectMember.role === "LEADER" || 
+            projectMember.role === "LEADER" ||
             projectMember.role === "MANAGER"
         );
 

@@ -53,7 +53,7 @@ export const createNotification = async (data: {
     } else if (data.type.includes("ASSIGNED")) {
         title = "📋 New Assignment";
     }
-    
+
     sendPushNotification(data.userId, title, data.content, url).catch((err) => {
         console.error("Error triggering push notification:", err);
     });
@@ -100,7 +100,7 @@ export const notifyTeamLeader = async (
 
 export const getNotificationsByUserId = async (userId: string, teamId: string, page = 1, limit = 10) => {
     return prisma.notification.findMany({
-        where: { 
+        where: {
             userId,
             OR: [
                 { teamId },

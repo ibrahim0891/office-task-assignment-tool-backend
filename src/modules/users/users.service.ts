@@ -137,10 +137,10 @@ export const updateUserProfileById = async (userId: string, body: any) => {
 export const getUserTeams = async (userId?: string) => {
     const whereClause = userId
         ? {
-              members: {
-                  some: { userId },
-              },
-          }
+            members: {
+                some: { userId },
+            },
+        }
         : {};
 
     return prisma.team.findMany({

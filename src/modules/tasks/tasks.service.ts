@@ -13,7 +13,7 @@ export const getTasksList = async (query: any, actingUserId?: string, userRole?:
 
     if (date) {
         const requestedDate = parseLocalDate(date);
-        
+
         let referenceTodayDate: Date;
         if (clientToday && typeof clientToday === "string" && /^\d{4}-\d{2}-\d{2}$/.test(clientToday)) {
             referenceTodayDate = parseLocalDate(clientToday);
@@ -150,8 +150,8 @@ export const createTaskItem = async (body: any, isMember: boolean) => {
     const dateStr =
         date ||
         (clientToday &&
-        typeof clientToday === "string" &&
-        /^\d{4}-\d{2}-\d{2}$/.test(clientToday)
+            typeof clientToday === "string" &&
+            /^\d{4}-\d{2}-\d{2}$/.test(clientToday)
             ? clientToday
             : getLocalDateString(new Date()));
     const taskDate = parseLocalDate(dateStr);

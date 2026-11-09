@@ -162,23 +162,23 @@ export const generateReport = async (
         // When memberId is provided, we still need all tasks in range to calculate memberBreakdown for the top bubbles
         memberId && memberId !== "all"
             ? prisma.task.findMany({
-                  where: {
-                      teamId,
-                      isSoftDeleted: false,
-                      date: { gte: start, lte: end },
-                  },
-                  select: {
-                      id: true,
-                      assignedToId: true,
-                      carryCount: true,
-                      column: {
-                          select: {
-                              name: true,
-                              isComplete: true,
-                          },
-                      },
-                  },
-              })
+                where: {
+                    teamId,
+                    isSoftDeleted: false,
+                    date: { gte: start, lte: end },
+                },
+                select: {
+                    id: true,
+                    assignedToId: true,
+                    carryCount: true,
+                    column: {
+                        select: {
+                            name: true,
+                            isComplete: true,
+                        },
+                    },
+                },
+            })
             : Promise.resolve(null),
     ]);
 
