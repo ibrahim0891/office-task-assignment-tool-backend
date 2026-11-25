@@ -63,15 +63,36 @@ export async function runCarryForwardAndRecurring(teamId: string, dateStr: strin
         const notificationsToCreate: any[] = [];
 
         const standardTaskIds: string[] = [];
+        const spanContinueTaskIds: string[] = [];
 
         for (const task of incompleteTasks) {
-            // Calculate calendar days elapsed since original date
+            const taskDateNormalized = parseLocalDate(getLocalDateString(task.date));
+            const daysFromTaskDate = Math.floor(
+                (targetDate.getTime() - taskDateNormalized.getTime()) /
+                    (1000 * 60 * 60 * 24),
+            );
+            if (daysFromTaskDate <= 0) {
+                continue; // Safety: Never carry forward tasks on the same calendar day
+            }
+
+            // Multi-day span: if task has a dueDate and targetDate is still on or before dueDate,
+            // bring it forward to today without incrementing carryCount or auto-flagging.
+            const dueDateNormalized = task.dueDate
+                ? parseLocalDate(getLocalDateString(task.dueDate))
+                : null;
+            if (dueDateNormalized && targetDate.getTime() <= dueDateNormalized.getTime()) {
+                spanContinueTaskIds.push(task.id);
+                continue;
+            }
+
+            // Past due date (or no due date): count days overdue from dueDate (if set) or originalDate
+            const referenceDate = dueDateNormalized || parseLocalDate(getLocalDateString(task.originalDate));
             const daysElapsed = Math.floor(
-                (targetDate.getTime() - task.originalDate.getTime()) /
+                (targetDate.getTime() - referenceDate.getTime()) /
                     (1000 * 60 * 60 * 24),
             );
             if (daysElapsed <= 0) {
-                continue; // Safety: Never carry forward tasks on the same calendar day
+                continue;
             }
 
             // We get the "Need Attention Later" column or the fallback column
@@ -137,6 +158,18 @@ export async function runCarryForwardAndRecurring(teamId: string, dateStr: strin
                     }),
                 });
             }
+        }
+
+        // Single bulk update for multi-day tasks still within their due date span (no carryCount increment)
+        if (spanContinueTaskIds.length > 0) {
+            operations.push(
+                prisma.task.updateMany({
+                    where: { id: { in: spanContinueTaskIds } },
+                    data: {
+                        date: targetDate,
+                    },
+                }),
+            );
         }
 
         // Single bulk update for all standard carried tasks

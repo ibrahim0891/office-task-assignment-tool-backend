@@ -300,9 +300,16 @@ export const updateTaskItem = async (taskId: string, body: any, actingUserId: st
         }
     }
 
-    const effectiveStartForValidation = targetStartDate || targetDate;
-    if (effectiveStartForValidation && targetDueDate && targetDueDate.getTime() < effectiveStartForValidation.getTime()) {
-        throw new Error("Due date cannot be earlier than start date.");
+    const isUpdatingDates =
+        startDate !== undefined ||
+        (date !== undefined && date !== null && date !== "") ||
+        dueDate !== undefined;
+
+    if (isUpdatingDates) {
+        const effectiveStartForValidation = targetStartDate || targetDate;
+        if (effectiveStartForValidation && targetDueDate && targetDueDate.getTime() < effectiveStartForValidation.getTime()) {
+            throw new Error("Due date cannot be earlier than start date.");
+        }
     }
 
     if (startDate !== undefined) {
